@@ -248,7 +248,7 @@ class DFT(QChem):
             CIS_GUESS_DISK_TYPE 0
             MAX_CIS_CYCLES {self.cis_max_iter}
             CALC_NAC TRUE
-            CIS_DER_NUMSTATE {molecule.nS}
+            CIS_DER_NUMSTATE {molecule.nT}
             SET_ITER {self.cpscf_max_iter}
             SET_CONV {self.cpscf_grad_tol}
             $end
