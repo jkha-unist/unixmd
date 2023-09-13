@@ -64,7 +64,249 @@ class DFT(QChem):
         self.move_dir(base_dir)
 
     def get_input_ISC(self, molecule, bo_list, calc_force_only):
-        pass
+        """ Generate Q-Chem input files: qchem_soc.in, qchem_singlet.in, qchem_triplet.in
+
+            :param object molecule: Molecule object
+            :param integer istep: Current MD step
+            :param integer,list bo_list: List of BO states for BO calculation
+        """
+        # Split bo_list into singlet and triplet lists
+        singlet_list = []
+        triplet_list = []
+        for ist in bo_list:
+            if (molecule.states[ist].mult == 1):
+                singlet_list.append(molecule.states[ist].sub_ist)
+            if (molecule.states[ist].mult == 3):
+                triplet_list.append(molecule.states[ist].sub_ist)
+        
+        # Make Q-Chem input file for SOC: qchem_soc.in
+        if (not calc_force_only and self.calc_coupling):
+            input_soc = ""
+
+            # Molecular information such as charge, geometry
+            input_molecule = textwrap.dedent(f"""\
+            $molecule
+            {int(molecule.charge)}  1
+            """)
+
+            for iat in range(molecule.nat_qm):
+                input_molecule += f"{molecule.symbols[iat]}"\
+                    + "".join([f"{i:15.8f}" for i in molecule.pos[iat]]) + "\n"
+            input_molecule += "$end\n\n"
+            input_soc += input_molecule
+
+            # Job control to calculate SOC
+            cis_nroot = max(molecule.nS-1, molecule.nT)
+            # Arguments about SCF, xc functional and basis set
+            input_soc += textwrap.dedent(f"""\
+            $rem
+            JOBTYPE SP
+            INPUT_BOHR TRUE
+            METHOD {self.functional}
+            BASIS {self.basis_set}
+            SCF_CONVERGENCE {self.scf_wf_tol}
+            SYMMETRY FALSE
+            SYM_IGNORE TRUE
+            """)
+            # Arguments about TDDFT and SOC
+            input_soc += textwrap.dedent(f"""\
+            CIS_N_ROOTS {cis_nroot}
+            CIS_TRIPLETS TRUE 
+            CIS_TRIPLETS TRUE 
+            CIS_CONVERGENCE {self.cis_en_tol}
+            MAX_CIS_CYCLES {self.cis_max_iter}
+            SET_ITER {self.cpscf_max_iter}
+            SET_CONV {self.cpscf_grad_tol}
+            CALC_SOC TRUE
+            $end\n\n
+            """)
+
+            file_name = "qchem_soc.in"
+            with open(file_name, "w") as f:
+                f.write(input_soc)
+        
+        # Make Q-Chem input file for NAC within singlet: qchem_singlet.in
+        input_singlet = textwrap.dedent(f"""\
+        $molecule
+        read
+        $end\n\n
+        """)
+        # Job control for NAC for singlet states
+        if (not calc_force_only and self.calc_coupling):
+            # Arguments about SCF, xc functional and basis set
+            input_singlet += textwrap.dedent(f"""\
+            $rem
+            JOBTYPE SP
+            INPUT_BOHR TRUE
+            METHOD {self.functional}
+            BASIS {self.basis_set}
+            SCF_GUESS READ
+            SCF_CONVERGENCE {self.scf_wf_tol}
+            SYMMETRY FALSE
+            SYM_IGNORE TRUE
+            """)
+
+            # Arguments about TDDFT and NAC for singlet states
+            input_singlet += textwrap.dedent(f"""\
+            CIS_N_ROOTS {molecule.nS-1}
+            CIS_SINGLETS TRUE
+            CIS_TRIPLETS FALSE
+            CIS_CONVERGENCE {self.cis_en_tol}
+            CIS_GUESS_DISK TRUE
+            CIS_GUESS_DISK_TYPE 2
+            MAX_CIS_CYCLES {self.cis_max_iter}
+            CALC_NAC TRUE
+            CIS_DER_NUMSTATE {molecule.nS}
+            SET_ITER {self.cpscf_max_iter}
+            SET_CONV {self.cpscf_grad_tol}
+            $end
+
+            $derivative_coupling
+            This is comment line
+            """)
+
+            for ist in range(molecule.nS):
+                input_singlet += f"{ist}  "
+            input_singlet += "\n$end\n\n"
+        
+        # Job control for force calculation
+        input_force = ""
+        guess = "READ"
+        for ist in singlet_list:
+            if (not calc_force_only and self.calc_coupling):
+                input_force += textwrap.dedent(f"""\
+                @@@
+
+                $molecule
+                read
+                $end
+
+                """)
+            
+            
+            input_force += textwrap.dedent(f"""\
+            $rem
+            JOBTYPE force
+            INPUT_BOHR TRUE
+            METHOD {self.functional}
+            BASIS {self.basis_set}
+            SCF_GUESS {guess}
+            SYMMETRY FALSE
+            SYM_IGNORE TRUE
+            """)
+            
+            # When ground state force is calculated, Q-Chem doesn't need CIS option.
+            if (ist != 0):
+                input_force += textwrap.dedent(f"""\
+                CIS_N_ROOTS {molecule.nS-1}
+                CIS_STATE_DERIV {ist}
+                CIS_SINGLETS TRUE
+                CIS_TRIPLETS FALSE
+                CIS_CONVERGENCE {self.cis_en_tol}
+                MAX_CIS_CYCLES {self.cis_max_iter}
+                SET_ITER {self.cpscf_max_iter}
+                SET_CONV {self.cpscf_grad_tol}
+                CIS_GUESS_DISK TRUE
+                CIS_GUESS_DISK_TYPE 2
+                SKIP_CIS_RPA TRUE
+                """)
+            input_force += "$end\n\n"
+        input_singlet += input_force
+
+        file_name = "qchem_singlet.in"
+        with open(file_name, "w") as f:
+            f.write(input_singlet)
+        
+        # Make Q-Chem input file for NAC within triplet: qchem_triplet.in
+        input_triplet = textwrap.dedent(f"""\
+        $molecule
+        read
+        $end\n\n
+        """)
+        # Job control for NAC for singlet states
+        if (not calc_force_only and self.calc_coupling):
+            # Arguments about SCF, xc functional and basis set
+            input_triplet += textwrap.dedent(f"""\
+            $rem
+            JOBTYPE SP
+            INPUT_BOHR TRUE
+            METHOD {self.functional}
+            BASIS {self.basis_set}
+            SCF_GUESS READ
+            SCF_CONVERGENCE {self.scf_wf_tol}
+            SYMMETRY FALSE
+            SYM_IGNORE TRUE
+            """)
+
+            # Arguments about TDDFT and NAC for triplet states
+            input_triplet += textwrap.dedent(f"""\
+            CIS_N_ROOTS {molecule.nT}
+            CIS_SINGLETS FALSE
+            CIS_TRIPLETS TRUE
+            CIS_CONVERGENCE {self.cis_en_tol}
+            CIS_GUESS_DISK TRUE
+            CIS_GUESS_DISK_TYPE 0
+            MAX_CIS_CYCLES {self.cis_max_iter}
+            CALC_NAC TRUE
+            CIS_DER_NUMSTATE {molecule.nS}
+            SET_ITER {self.cpscf_max_iter}
+            SET_CONV {self.cpscf_grad_tol}
+            $end
+
+            $derivative_coupling
+            This is comment line
+            """)
+
+            for ist in range(molecule.nT):
+                input_triplet += f"{ist+1}  "
+            input_triplet += "\n$end\n\n"
+        
+        # Job control for force calculation
+        input_force = ""
+        guess = "READ"
+        for ist in triplet_list:
+            if (not calc_force_only and self.calc_coupling):
+                input_force += textwrap.dedent(f"""\
+                @@@
+
+                $molecule
+                read
+                $end
+
+                """)
+            
+            
+            input_force += textwrap.dedent(f"""\
+            $rem
+            JOBTYPE force
+            INPUT_BOHR TRUE
+            METHOD {self.functional}
+            BASIS {self.basis_set}
+            SCF_GUESS {guess}
+            SYMMETRY FALSE
+            SYM_IGNORE TRUE
+            """)
+            
+            input_force += textwrap.dedent(f"""\
+            CIS_N_ROOTS {molecule.nT}
+            CIS_STATE_DERIV {ist+1}
+            CIS_SINGLETS FALSE
+            CIS_TRIPLETS TRUE
+            CIS_CONVERGENCE {self.cis_en_tol}
+            MAX_CIS_CYCLES {self.cis_max_iter}
+            SET_ITER {self.cpscf_max_iter}
+            SET_CONV {self.cpscf_grad_tol}
+            CIS_GUESS_DISK TRUE
+            CIS_GUESS_DISK_TYPE 0
+            SKIP_CIS_RPA TRUE
+            """)
+            input_force += "$end\n\n"
+        input_triplet += input_force
+
+        file_name = "qchem_triplet.in"
+        with open(file_name, "w") as f:
+            f.write(input_triplet)
+
 
     def run_QM_ISC(self, base_dir, istep, bo_list):
         pass
