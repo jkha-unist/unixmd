@@ -52,11 +52,26 @@ class DFT(QChem):
         """
         super().get_data(base_dir, calc_force_only)
         self.write_xyz(molecule)
-        self.get_input(molecule, bo_list, calc_force_only)
-        self.run_QM(base_dir, istep, bo_list)
-        self.extract_QM(molecule, bo_list, calc_force_only)
+        if (molecule.nT == 0):
+            self.get_input(molecule, bo_list, calc_force_only)
+            self.run_QM(base_dir, istep, bo_list)
+            self.extract_QM(molecule, bo_list, calc_force_only)
+        elif (molecule.nT > 0):
+            self.get_input_ISC(molecule, bo_list, calc_force_only)
+            self.run_QM_ISC(base_dir, istep, bo_list)
+            self.extract_QM_ISC(molecule, bo_list, calc_force_only)
+
         self.move_dir(base_dir)
 
+    def get_input_ISC(self, molecule, bo_list, calc_force_only):
+        pass
+
+    def run_QM_ISC(self, base_dir, istep, bo_list):
+        pass
+        
+    def extract_QM_ISC(self, molecule, bo_list, calc_force_only):
+        pass
+    
     def get_input(self, molecule, bo_list, calc_force_only):
         """ Generate Q-Chem input files: qchem.in
 
