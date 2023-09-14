@@ -58,7 +58,7 @@ class DFT(QChem):
             self.extract_QM(molecule, bo_list, calc_force_only)
         elif (molecule.nT > 0):
             self.get_input_ISC(molecule, bo_list, calc_force_only)
-            self.run_QM_ISC(base_dir, istep, bo_list, calc_force_only)
+            self.run_QM_ISC(base_dir, molecule, istep, bo_list, calc_force_only)
             self.extract_QM_ISC(molecule, bo_list, calc_force_only)
 
         self.move_dir(base_dir)
@@ -311,7 +311,7 @@ class DFT(QChem):
                 f.write(input_triplet)
 
 
-    def run_QM_ISC(self, base_dir, istep, bo_list, calc_force_only):
+    def run_QM_ISC(self, base_dir, molecule, istep, bo_list, calc_force_only):
         """ Run (TD)DFT calculation and save the output files to qm_log directory
 
             :param string base_dir: Base directory
@@ -327,6 +327,15 @@ class DFT(QChem):
             os.environ[key] = value
         os.environ["QCSCRATCH"] = self.scr_qm_dir
         os.environ["QCLOCALSCR"] = self.scr_qm_dir
+        
+        # Split bo_list into singlet and triplet lists
+        singlet_list = []
+        triplet_list = []
+        for ist in bo_list:
+            if (molecule.states[ist].mult == 1):
+                singlet_list.append(molecule.states[ist].sub_ist)
+            if (molecule.states[ist].mult == 3):
+                triplet_list.append(molecule.states[ist].sub_ist)
 
         # Run SOC calc
         if(not calc_force_only):
