@@ -349,13 +349,19 @@ class DFT(QChem):
         if ((not calc_force_only) or (calc_force_only and len(singlet_list) > 0)):
             qm_exec_command = f"$QC/bin/qchem -nt {self.nthreads} -save qchem_singlet.in log_singlet save_singlet >> qcprog_singlet.info "
             os.system(qm_exec_command)
-            os.system("cat log_singlet >> log")
+            if (calc_force_only):
+                os.system("cat log_singlet > log")
+            else:
+                os.system("cat log_singlet >> log")
 
         # Run triplet NAC (and force) calculation
         if ((not calc_force_only) or (calc_force_only and len(triplet_list) > 0)):
             qm_exec_command = f"$QC/bin/qchem -nt {self.nthreads} -save qchem_triplet.in log_triplet save_triplet >> qcprog_triplet.info "
             os.system(qm_exec_command)
-            os.system("cat log_triplet >> log")
+            if (calc_force_only):
+                os.system("cat log_triplet > log")
+            else:
+                os.system("cat log_triplet >> log")
         
         tmp_dir = os.path.join(base_dir, "qm_log")
         if (os.path.exists(tmp_dir)):
