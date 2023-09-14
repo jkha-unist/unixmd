@@ -129,7 +129,7 @@ class DFT(QChem):
         input_singlet = textwrap.dedent(f"""\
         $molecule
         read
-        $end\n\n
+        $end\n
         """)
         # Job control for NAC for singlet states
         if (not calc_force_only and self.calc_coupling):
@@ -180,7 +180,6 @@ class DFT(QChem):
                 $molecule
                 read
                 $end
-
                 """)
             
             
@@ -214,8 +213,9 @@ class DFT(QChem):
         input_singlet += input_force
 
         file_name = "qchem_singlet.in"
-        with open(file_name, "w") as f:
-            f.write(input_singlet)
+        if ((not calc_force_only) or (calc_force_only and len(singlet_list) > 0)):
+            with open(file_name, "w") as f:
+                f.write(input_singlet)
         
         # Make Q-Chem input file for NAC within triplet: qchem_triplet.in
         input_triplet = textwrap.dedent(f"""\
@@ -304,8 +304,9 @@ class DFT(QChem):
         input_triplet += input_force
 
         file_name = "qchem_triplet.in"
-        with open(file_name, "w") as f:
-            f.write(input_triplet)
+        if ((not calc_force_only) or (calc_force_only and len(triplet_list) > 0)):
+            with open(file_name, "w") as f:
+                f.write(input_triplet)
 
 
     def run_QM_ISC(self, base_dir, istep, bo_list):
