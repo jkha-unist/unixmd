@@ -58,7 +58,7 @@ class DFT(QChem):
             self.extract_QM(molecule, bo_list, calc_force_only)
         elif (molecule.nT > 0):
             self.get_input_ISC(molecule, bo_list, calc_force_only)
-            self.run_QM_ISC(base_dir, istep, bo_list)
+            self.run_QM_ISC(base_dir, istep, bo_list, calc_force_only)
             self.extract_QM_ISC(molecule, bo_list, calc_force_only)
 
         self.move_dir(base_dir)
@@ -180,6 +180,7 @@ class DFT(QChem):
                 $molecule
                 read
                 $end
+
                 """)
             
             
@@ -221,7 +222,7 @@ class DFT(QChem):
         input_triplet = textwrap.dedent(f"""\
         $molecule
         read
-        $end\n\n
+        $end\n
         """)
         # Job control for NAC for singlet states
         if (not calc_force_only and self.calc_coupling):
@@ -273,6 +274,7 @@ class DFT(QChem):
                 read
                 $end
 
+
                 """)
             
             
@@ -309,8 +311,47 @@ class DFT(QChem):
                 f.write(input_triplet)
 
 
-    def run_QM_ISC(self, base_dir, istep, bo_list):
-        pass
+    def run_QM_ISC(self, base_dir, istep, bo_list, calc_force_only):
+        """ Run (TD)DFT calculation and save the output files to qm_log directory
+
+            :param string base_dir: Base directory
+            :param integer istep: Current MD step
+            :param integer,list bo_list: List of BO states for BO calculation
+        """
+        # Set environment variable 
+        os.environ["QC"] = self.root_path
+        path_qcenv = os.path.join(self.root_path, "qcenv.sh")
+        command = f'env -i bash -c "source {path_qcenv} && env"'
+        for line in subprocess.getoutput(command).split("\n"):
+            key, value = line.split("=")
+            os.environ[key] = value
+        os.environ["QCSCRATCH"] = self.scr_qm_dir
+        os.environ["QCLOCALSCR"] = self.scr_qm_dir
+
+        # Run SOC calc
+        if(not calc_force_only):
+            qm_exec_command = f"$QC/bin/qchem -nt {self.nthreads} -save qchem_soc.in log_soc save_soc > qcprog_soc.info "
+            os.system(qm_exec_command)
+            os.system("cp -r save_soc save_singlet")
+            os.system("cp -r save_soc save_triplet")
+            os.system("cat log_soc > log")
+
+        # Run singlet NAC (and force) calculation
+        if ((not calc_force_only) or (calc_force_only and len(singlet_list) > 0)):
+            qm_exec_command = f"$QC/bin/qchem -nt {self.nthreads} -save qchem_singlet.in log_singlet save_singlet >> qcprog_singlet.info "
+            os.system(qm_exec_command)
+            os.system("cat log_singlet >> log")
+
+        # Run triplet NAC (and force) calculation
+        if ((not calc_force_only) or (calc_force_only and len(triplet_list) > 0)):
+            qm_exec_command = f"$QC/bin/qchem -nt {self.nthreads} -save qchem_triplet.in log_triplet save_triplet >> qcprog_triplet.info "
+            os.system(qm_exec_command)
+            os.system("cat log_triplet >> log")
+        
+        tmp_dir = os.path.join(base_dir, "qm_log")
+        if (os.path.exists(tmp_dir)):
+            log_step = f"log.{istep + 1}.{bo_list[0]}"
+            shutil.copy("log", os.path.join(tmp_dir, log_step))
         
     def extract_QM_ISC(self, molecule, bo_list, calc_force_only):
         pass
