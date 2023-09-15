@@ -369,7 +369,146 @@ class DFT(QChem):
             shutil.copy("log", os.path.join(tmp_dir, log_step))
         
     def extract_QM_ISC(self, molecule, bo_list, calc_force_only):
-        pass
+        """ Read the output files to get BO information
+
+            :param object molecule: Molecule object
+            :param integer,list bo_list: List of BO states for BO calculation
+            :param boolean calc_force_only: Logical to decide whether calculate force only
+        """
+        # Split bo_list into singlet and triplet lists
+        singlet_list = []
+        triplet_list = []
+        for ist in bo_list:
+            if (molecule.states[ist].mult == 1):
+                singlet_list.append(molecule.states[ist].sub_ist)
+            if (molecule.states[ist].mult == 3):
+                triplet_list.append(molecule.states[ist].sub_ist)
+        
+        log_soc = ""
+        if (not calc_force_only):
+            file_name = "log_soc"
+            with open(file_name, "r") as f:
+                log_soc = f.read()
+        
+        log_singlet = ""
+        if ((len(singlet_list) > 0) or (not calc_force_only)):
+            file_name = "log_singlet"
+            with open(file_name, "r") as f:
+                log_singlet = f.read()
+
+        log_triplet = ""
+        if ((len(triplet_list) > 0) or (not calc_force_only)):
+            file_name = "log_triplet"
+            with open(file_name, "r") as f:
+                log_triplet = f.read()
+
+        if (not calc_force_only):
+            # Ground state energy
+            energy = re.findall('Total energy in the final basis set =\s*([-]*\S*)', log_soc)
+            energy = np.array(energy, dtype=np.float64)
+            molecule.states[0].energy = energy[0]
+
+            # Singlet excited state energy
+            if (molecule.nst > 1):
+                energy = re.findall('Total energy for state\s*\d*.\s*([-]*\S*)', log_singlet)
+                energy = np.array(energy, dtype=np.float64)
+
+                for ist, en in enumerate(energy):
+                    if ist < molecule.nS - 1:
+                        molecule.states[ist + 1].energy = en
+            
+            # Triplet excited state energy
+            if (molecule.nst > 1):
+                energy = re.findall('Total energy for state\s*\d*.\s*([-]*\S*)', log_triplet)
+                energy = np.array(energy, dtype=np.float64)
+
+                for ist, en in enumerate(energy):
+                    if ist < molecule.nT:
+                        molecule.states[ist + molecule.nS].energy = en
+        # Adiabatic force 
+        tmp_f = "Gradient of\D*\s*" 
+        num_line = int(molecule.nat_qm / 6)
+        if (num_line >= 1):
+            tmp_f += ("\s*\d*\s*\d*\s*\d*\s*\d*\s*\d*\s*\d*"
+                 + ("\s*\d?\s*" + "([-]*\S*)\s*" * 6) * 3) * num_line
+
+        dnum = molecule.nat_qm % 6
+        tmp_f += "\s*\d*" * dnum
+        tmp_f += ("\s*\d?\s*" + "([-]*\S*)\s*" * dnum) * 3
+
+        force = re.findall(tmp_f, log_singlet+log_triplet)
+        force = np.array(force, dtype=np.float64)
+
+        # Q-Chem provides energy gradient not force
+        force = -force
+
+        for index, ist in enumerate(bo_list):
+            iline = 0; iiter = 0
+            for iiter in range(num_line):
+                tmp_force = np.transpose(force[index][18 * iiter:18 * (iiter + 1)].reshape(3, 6, order="C"))
+                for iat in range(6):
+                    molecule.states[ist].force[6 * iline + iat] = np.copy(tmp_force[iat])
+                iline += 1
+
+            if (dnum != 0):
+                if (num_line != 0):
+                    tmp_force = np.transpose(force[index][18 * (iiter + 1):].reshape(3, dnum, order="C"))
+                else:
+                    tmp_force = np.transpose(force[index][0:].reshape(3, dnum, order="C"))
+
+                for iat in range(dnum):
+                    molecule.states[ist].force[6 * iline + iat] = np.copy(tmp_force[iat])
+        # NACs
+        if (not calc_force_only and self.calc_coupling):
+            tmp_nac = "with ETF[:]*\s*Atom\s*X\s*Y\s*Z\s*[-]*" + ("\s*\d*\s*" + "([-]*\S*)\s*"*3) * molecule.nat_qm
+            nac = re.findall(tmp_nac, log_singlet+log_triplet)
+            nac = np.array(nac, dtype=np.float64)
+
+            kst = 0
+            for ist in range(molecule.nS):
+                for jst in range(ist + 1, molecule.nS):
+                    molecule.nac[ist, jst] = nac[kst].reshape(molecule.nat_qm, 3, order='C')
+                    molecule.nac[jst, ist] = - molecule.nac[ist, jst]
+                    kst += 1
+            for ist in range(molecule.nT):
+                for jst in range(ist + 1, molecule.nT):
+                    ist_tot = ist + molecule.nS
+                    jst_tot = jst + molecule.nS
+                    molecule.nac[ist_tot, jst_tot] = nac[kst].reshape(molecule.nat_qm, 3, order='C')
+                    molecule.nac[jst_tot, ist_tot] = - molecule.nac[ist_tot, jst_tot]
+                    kst += 1
+
+        # SOCs
+        if (not calc_force_only and self.calc_coupling):
+            # Between ground state and triplet states
+            tmp_soc = "Total SOC between the singlet ground state.*"
+            for ist in range(molecule.nT):
+                tmp_soc += f"\nT{ist+1}\s*(\d+.\d*).*"
+            soc = re.findall(tmp_soc, log_soc)
+            soc = np.array(soc, dtype=np.float64).flatten()
+            molecule.socme[0, molecule.nS:molecule.nst] = soc[:] 
+            molecule.socme[molecule.nS:molecule.nst, 0] = soc[:] 
+            
+            # Between singlet excited states and triplet states
+            for ist in range(molecule.nS-1):
+                tmp_soc = f"Total SOC between the S{ist+1} state.*"
+                for jst in range(molecule.nT):
+                    tmp_soc += f"\nT{jst+1}\s*(\d+.\d*).*"
+                soc = re.findall(tmp_soc, log_soc)
+                soc = np.array(soc, dtype=np.float64).flatten()
+                molecule.socme[ist+1, molecule.nS:molecule.nst] = soc[:] 
+                molecule.socme[molecule.nS:molecule.nst, ist+1] = soc[:] 
+
+            # Between triplet states and triplet states
+            for ist in range(molecule.nT-1):
+                tmp_soc = f"Total SOC between the T{ist+1} state.*"
+                for jst in range(ist+1, molecule.nT):
+                    tmp_soc += f"\nT{jst+1}\s*(\d+.\d*).*"
+                soc = re.findall(tmp_soc, log_soc)
+                soc = np.array(soc, dtype=np.float64).flatten()
+                molecule.socme[ist+molecule.nS, ist+molecule.nS+1:molecule.nst] = soc[:]
+                molecule.socme[ist+molecule.nS+1:molecule.nst, ist+molecule.nS] = soc[:]
+                    
     
     def get_input(self, molecule, bo_list, calc_force_only):
         """ Generate Q-Chem input files: qchem.in
