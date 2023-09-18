@@ -134,8 +134,10 @@ class Molecule(object):
         # Initialize couplings
         self.nacme = np.zeros((self.nst, self.nst))
         self.nacme_old = np.zeros((self.nst, self.nst))
-        self.socme = np.zeros((self.nst, self.nst), dtype=np.complex128)
-        self.socme_old = np.zeros((self.nst, self.nst), dtype=np.complex128)
+        self.socme = np.zeros((self.nst, self.nst))
+        self.socme_old = np.zeros((self.nst, self.nst))
+        #self.socme = np.zeros((self.nst, self.nst), dtype=np.complex128) # Triplet spin-substates are not explicitly considered.
+        #self.socme_old = np.zeros((self.nst, self.nst), dtype=np.complex128)
 
         # Initialize other properties
         self.nac = np.zeros((self.nst, self.nst, self.nat_qm, self.ndim))
@@ -283,6 +285,7 @@ class Molecule(object):
             states.energy_old = states.energy
         self.nac_old = np.copy(self.nac)
         self.nacme_old = np.copy(self.nacme)
+        self.socme_old = np.copy(self.socme)
 
     def get_nr_electrons(self):
         """ Get the number of electrons
