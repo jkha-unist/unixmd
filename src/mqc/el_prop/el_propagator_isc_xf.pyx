@@ -4,10 +4,11 @@ from cpython.complex cimport complex
 import numpy as np
 cimport numpy as np
 
-cdef extern from "rk4_xf.c":
+cdef extern from "rk4_isc_xf.c":
     void rk4(int nat, int ndim, int nst, int nesteps, double dt, char *elec_object, \
         bint *l_coh, double *mass, double *energy, double *energy_old, double *sigma, \
-        double **nacme, double **nacme_old, double **pos, double **qmom, double ***aux_pos, \
+        double **nacme, double **nacme_old, double **socme, double **socme_old , \
+        double **pos, double **qmom, double ***aux_pos, \
         double ***phase, double complex *coef, double complex **rho, int verbosity, \
         double *dotpopdec)
 
@@ -21,6 +22,8 @@ def el_run(md):
         double *sigma
         double **nacme
         double **nacme_old
+        double **socme
+        double **socme_old
         double **pos
         double **qmom
         double ***aux_pos
@@ -47,6 +50,8 @@ def el_run(md):
 
     nacme = <double**> PyMem_Malloc(nst * sizeof(double*))
     nacme_old = <double**> PyMem_Malloc(nst * sizeof(double*))
+    socme = <double**> PyMem_Malloc(nst * sizeof(double*))
+    socme_old = <double**> PyMem_Malloc(nst * sizeof(double*))
     pos = <double**> PyMem_Malloc(aux_nat * sizeof(double*))
     qmom = <double**> PyMem_Malloc(aux_nat * sizeof(double*))
 
@@ -56,6 +61,8 @@ def el_run(md):
     for ist in range(nst):
         nacme[ist] = <double*> PyMem_Malloc(nst * sizeof(double))
         nacme_old[ist] = <double*> PyMem_Malloc(nst * sizeof(double))
+        socme[ist] = <double*> PyMem_Malloc(nst * sizeof(double))
+        socme_old[ist] = <double*> PyMem_Malloc(nst * sizeof(double))
 
     for iat in range(aux_nat):
         pos[iat] = <double*> PyMem_Malloc(aux_ndim * sizeof(double))
@@ -86,6 +93,8 @@ def el_run(md):
         for jst in range(nst):
             nacme[ist][jst] = md.mol.nacme[ist, jst]
             nacme_old[ist][jst] = md.mol.nacme_old[ist, jst]
+            socme[ist][jst] = md.mol.nacme[ist, jst]
+            socme_old[ist][jst] = md.mol.nacme_old[ist, jst]
 
     for iat in range(aux_nat):
         for isp in range(aux_ndim):
@@ -122,7 +131,8 @@ def el_run(md):
     # Propagate electrons depending on the propagator
     if (md.propagator == "rk4"):
         rk4(aux_nat, aux_ndim, nst, nesteps, dt, elec_object_c, l_coh, mass, energy, \
-            energy_old, sigma, nacme, nacme_old, pos, qmom, aux_pos, phase, coef, rho, verbosity, dotpopdec)
+            energy_old, sigma, nacme, nacme_old, socme, socme_old, pos, qmom, aux_pos, \
+            phase, coef, rho, verbosity, dotpopdec)
 
     # Assign variables from C to python
     if (md.elec_object == "coefficient"):
@@ -169,6 +179,8 @@ def el_run(md):
     for ist in range(nst):
         PyMem_Free(nacme[ist])
         PyMem_Free(nacme_old[ist])
+        PyMem_Free(socme[ist])
+        PyMem_Free(socme_old[ist])
 
     for iat in range(aux_nat):
         PyMem_Free(pos[iat])
@@ -186,6 +198,8 @@ def el_run(md):
 
     PyMem_Free(nacme)
     PyMem_Free(nacme_old)
+    PyMem_Free(socme)
+    PyMem_Free(socme_old)
     PyMem_Free(pos)
     PyMem_Free(qmom)
 
