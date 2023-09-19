@@ -508,7 +508,7 @@ class DFT(QChem):
                 soc = np.array(soc, dtype=np.float64).flatten()
                 molecule.socme[ist+molecule.nS, ist+molecule.nS+1:molecule.nst] = soc[:]
                 molecule.socme[ist+molecule.nS+1:molecule.nst, ist+molecule.nS] = soc[:]
-                    
+            molecule.socme *= 4.55633 * 10 ** -6
     
     def get_input(self, molecule, bo_list, calc_force_only):
         """ Generate Q-Chem input files: qchem.in
