@@ -42,7 +42,7 @@ extensions = [
         libraries=libs, library_dirs=lib_dirs),
     Extension("el_propagator_xf", sources=sourcefile2, include_dirs=[np.get_include()]),
     Extension("el_propagator_isc_xf", sources=sourcefile3, include_dirs=[np.get_include()]),
-    Extension("el_propagator_ct", sources=sourcefile3, include_dirs=[np.get_include()]),
+    Extension("el_propagator_ct", sources=sourcefile4, include_dirs=[np.get_include()]),
     Extension("cioverlap", sources=sourcefile5, include_dirs=[np.get_include()], \
         libraries=libs, library_dirs=lib_dirs, extra_compile_args=extra_flags)
 ]
