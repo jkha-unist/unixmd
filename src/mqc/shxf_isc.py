@@ -306,7 +306,7 @@ class SHXF_ISC(MQC):
                 else:
                     self.prob[ist] = - 2. * self.mol.rho.real[ist, self.rstate] * \
                         self.mol.nacme[ist, self.rstate] * self.dt / self.mol.rho.real[self.rstate, self.rstate]
-                    self.prob[ist] += - 2. * np.real(1.0j * mol.socme[ist, self.rstate] * self.mol.rho.real[ist, self.rstate]) * \
+                    self.prob[ist] += - 2. * np.real(1.0j * self.mol.socme[ist, self.rstate] * self.mol.rho.real[ist, self.rstate]) * \
                             self.dt / self.mol.rho.real[self.rstate, self.rstate]
 
                 if (self.prob[ist] < 0.):
