@@ -155,20 +155,28 @@ class DFT(QChem):
             CIS_GUESS_DISK TRUE
             CIS_GUESS_DISK_TYPE 2
             MAX_CIS_CYCLES {self.cis_max_iter}
-            CALC_NAC TRUE
-            CIS_DER_NUMSTATE {molecule.nS}
             SET_ITER {self.cpscf_max_iter}
             SET_CONV {self.cpscf_grad_tol}
-            $end
-
-            $derivative_coupling
-            This is comment line
             """)
+            
+            if (molecule.nS > 1):
+                input_singlet += textwrap.dedent(f"""\
+                CALC_NAC TRUE
+                CIS_DER_NUMSTATE {molecule.nS}
+                $end
 
-            for ist in range(molecule.nS):
-                input_singlet += f"{ist}  "
-            input_singlet += "\n$end\n\n"
-        
+                $derivative_coupling
+                This is comment line
+                """)
+
+                for ist in range(molecule.nS):
+                    input_singlet += f"{ist}  "
+                input_singlet += f"\n$end\n\n"
+
+            else:
+                input_singlet += f"$end\n\n"
+            
+            
         # Job control for force calculation
         input_force = ""
         guess = "READ"
@@ -248,19 +256,28 @@ class DFT(QChem):
             CIS_GUESS_DISK TRUE
             CIS_GUESS_DISK_TYPE 0
             MAX_CIS_CYCLES {self.cis_max_iter}
-            CALC_NAC TRUE
-            CIS_DER_NUMSTATE {molecule.nT}
             SET_ITER {self.cpscf_max_iter}
             SET_CONV {self.cpscf_grad_tol}
-            $end
-
-            $derivative_coupling
-            This is comment line
             """)
+            if (molecule.nT > 1):
+                input_triplet += textwrap.dedent(f"""\
+                CALC_NAC TRUE
+                CIS_DER_NUMSTATE {molecule.nT}
+                $end
 
-            for ist in range(molecule.nT):
-                input_triplet += f"{ist+1}  "
-            input_triplet += "\n$end\n\n"
+                $derivative_coupling
+                This is comment line
+                """)
+
+                for ist in range(molecule.nT):
+                    input_triplet += f"{ist+1}  "
+                input_triplet += f"\n$end\n\n"
+
+            else:
+                input_triplet += textwrap.dedent(f"""\
+                CIS_RELAXED_DENSITY TRUE
+                $end\n
+                """)
         
         # Job control for force calculation
         input_force = ""
@@ -338,7 +355,7 @@ class DFT(QChem):
                 triplet_list.append(molecule.states[ist].sub_ist)
 
         # Run SOC calc
-        if(not calc_force_only):
+        if (not calc_force_only):
             qm_exec_command = f"$QC/bin/qchem -nt {self.nthreads} -save qchem_soc.in log_soc save_soc > qcprog_soc.info "
             os.system(qm_exec_command)
             os.system("cp -r save_soc save_singlet")
@@ -465,11 +482,17 @@ class DFT(QChem):
             nac = np.array(nac, dtype=np.float64)
 
             kst = 0
+            
+            molecule.nac[:, :] = 0.0
+            
+            # Singlet states
             for ist in range(molecule.nS):
                 for jst in range(ist + 1, molecule.nS):
                     molecule.nac[ist, jst] = nac[kst].reshape(molecule.nat_qm, 3, order='C')
                     molecule.nac[jst, ist] = - molecule.nac[ist, jst]
                     kst += 1
+
+            # Triplet states
             for ist in range(molecule.nT):
                 for jst in range(ist + 1, molecule.nT):
                     ist_tot = ist + molecule.nS
@@ -480,6 +503,9 @@ class DFT(QChem):
 
         # SOCs
         if (not calc_force_only and self.calc_coupling):
+            
+            molecule.socme[:, :] = 0.0
+            
             # Between ground state and triplet states
             tmp_soc = "Total SOC between the singlet ground state.*"
             for ist in range(molecule.nT):
