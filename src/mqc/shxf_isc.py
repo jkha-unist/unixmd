@@ -141,6 +141,7 @@ class SHXF_ISC(MQC):
         # Debug variables
         self.dotpopdec = np.zeros(self.mol.nst)
         self.dotpopnac = np.zeros(self.mol.nst)
+        self.dotpopsoc = np.zeros(self.mol.nst)
         self.qmom = np.zeros((self.aux.nat, self.aux.ndim))
 
         # Initialize event to print
@@ -652,6 +653,10 @@ class SHXF_ISC(MQC):
             # Write NAC term in DOTPOPNAC
             tmp = f'{istep + 1:9d}' + "".join([f'{pop:15.8f}' for pop in self.dotpopnac])
             typewriter(tmp, unixmd_dir, "DOTPOPNAC", "a")
+            
+            # Write NAC term in DOTPOPNAC
+            tmp = f'{istep + 1:9d}' + "".join([f'{pop:15.8f}' for pop in self.dotpopsoc])
+            typewriter(tmp, unixmd_dir, "DOTPOPSOC", "a")
 
             # Write decoherence term in DOTPOPDEC
             tmp = f'{istep + 1:9d}' + "".join([f'{pop:15.8f}' for pop in self.dotpopdec])

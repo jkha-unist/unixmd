@@ -93,8 +93,8 @@ def el_run(md):
         for jst in range(nst):
             nacme[ist][jst] = md.mol.nacme[ist, jst]
             nacme_old[ist][jst] = md.mol.nacme_old[ist, jst]
-            socme[ist][jst] = md.mol.nacme[ist, jst]
-            socme_old[ist][jst] = md.mol.nacme_old[ist, jst]
+            socme[ist][jst] = md.mol.socme[ist, jst]
+            socme_old[ist][jst] = md.mol.socme_old[ist, jst]
 
     for iat in range(aux_nat):
         for isp in range(aux_ndim):
@@ -161,9 +161,11 @@ def el_run(md):
         for ist in range(nst):
             md.dotpopdec[ist] = dotpopdec[ist]
             md.dotpopnac[ist] = 0.
+            md.dotpopsoc[ist] = 0.
             for jst in range(nst):
                 if (jst != ist):
                     md.dotpopnac[ist] -= 2. * nacme[ist][jst] * md.mol.rho.real[jst, ist]
+                    md.dotpopsoc[ist] += 2. * socme[ist][jst] * md.mol.rho.imag[ist, jst]
 
     if (verbosity >= 2):
         for iat in range(aux_nat):

@@ -400,6 +400,11 @@ class MQC(object):
             # NACME file header
             tmp = f'{"#":5s}Non-Adiabatic Coupling Matrix Elements: off-diagonal'
             typewriter(tmp, unixmd_dir, "NACME", "w")
+            
+            # SOCME file header
+            if (self.mol.nT > 0):
+                tmp = f'{"#":5s}Spin-Orbit Coupling Matrix Elements: off-diagonal'
+                typewriter(tmp, unixmd_dir, "SOCME", "w")
 
             # DOTPOPNAC file header
             if (self.verbosity >= 1):
@@ -461,6 +466,12 @@ class MQC(object):
             tmp = f'{istep + 1:10d}' + "".join([f'{self.mol.nacme[ist, jst]:15.8f}' \
                 for ist in range(self.mol.nst) for jst in range(ist + 1, self.mol.nst)])
             typewriter(tmp, unixmd_dir, "NACME", "a")
+            
+            # Write SOCME file
+            if (self.mol.nT > 0):
+                tmp = f'{istep + 1:10d}' + "".join([f'{self.mol.socme[ist, jst]:15.8f}' \
+                    for ist in range(self.mol.nst) for jst in range(ist + 1, self.mol.nst)])
+                typewriter(tmp, unixmd_dir, "SOCME", "a")
 
             # Write NACV file
             if (not self.mol.l_nacme and self.verbosity >= 2):
