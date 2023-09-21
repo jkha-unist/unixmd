@@ -65,7 +65,7 @@ static void rhodot(int nst, double *e, double **dv, double **soc, double complex
         for(jst = 0; jst < nst; jst++){
             if(ist != jst){
                 rho_dot[ist][ist] -= dv[ist][jst] * 2.0 * creal(rho[ist][jst]);
-                rho_dot[ist][ist] -= 2.0 * creal(1.0 * I * soc[ist][jst] * rho[ist][jst]);
+                rho_dot[ist][ist] += soc[ist][jst] * 2.0 * cimag(rho[ist][jst]);
             }
         }
     }
