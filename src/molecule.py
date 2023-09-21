@@ -9,14 +9,14 @@ class State(object):
         :param integer ndim: Dimension of space
         :param integer nat: Number of atoms
     """
-    def __init__(self, ndim, nat):
+    def __init__(self, ndim, nat, mult, sub_ist):
         # Initialize variables
         self.energy = 0.
         self.energy_old = 0.
         self.force = np.zeros((nat, ndim))
         self.coef = 0. + 0.j
-        self.multiplicity = 1
-
+        self.mult = mult
+        self.sub_ist = sub_ist
 
 class Molecule(object):
     """ Class for a molecule object including State objects
@@ -32,14 +32,29 @@ class Molecule(object):
         :param double charge: Total charge of the system
         :param boolean l_model: Is the system a model system?
     """
-    def __init__(self, geometry, ndim=3, nstates=1, l_qmmm=False, natoms_mm=None, ndof=None, \
+    def __init__(self, geometry, ndim=3, nsinglets=1, ntriplets=0, l_spin_substate=False, l_qmmm=False, natoms_mm=None, ndof=None, \
         unit_pos='angs', unit_vel='au', charge=0., l_model=False):
         # Save name of Molecule class
         self.mol_type = self.__class__.__name__
 
         # Initialize input values
         self.ndim = ndim
-        self.nst = nstates
+        
+        self.nS = nsinglets 
+        if (l_spin_substate):
+            error_message = "Accounting triplet substates is not implemented yet"
+            error_vars = f"l_spin_substate = {l_spin_substate}"
+            raise ValueError (f"( {self.mol_type}.{call_name()} ) {error_message} ( {error_vars} )")
+            #self.nT = ntriplets * 3
+        else:
+            self.nT = ntriplets
+        
+        self.nst = self.nS + self.nT
+        
+        #print(self.nS) # test
+        #print(self.nT) # test
+        #print(self.nst) # test
+
         self.l_model = l_model
 
         # Conversion unit
@@ -109,14 +124,20 @@ class Molecule(object):
 
         # Initialize BO states
         self.states = []
-        for ist in range(self.nst):
-            self.states.append(State(self.ndim, self.nat))
+        for ist in range(self.nS):
+            self.states.append(State(self.ndim, self.nat, mult=1, sub_ist = ist))
+            #print(ist) # test
+        for ist in range(self.nS, self.nst):
+            self.states.append(State(self.ndim, self.nat, mult=3, sub_ist = ist-self.nS))
+            #print(ist) # test
 
         # Initialize couplings
         self.nacme = np.zeros((self.nst, self.nst))
         self.nacme_old = np.zeros((self.nst, self.nst))
-        self.socme = np.zeros((self.nst, self.nst), dtype=np.complex128)
-        self.socme_old = np.zeros((self.nst, self.nst), dtype=np.complex128)
+        self.socme = np.zeros((self.nst, self.nst))
+        self.socme_old = np.zeros((self.nst, self.nst))
+        #self.socme = np.zeros((self.nst, self.nst), dtype=np.complex128) # Triplet spin-substates are not explicitly considered.
+        #self.socme_old = np.zeros((self.nst, self.nst), dtype=np.complex128)
 
         # Initialize other properties
         self.nac = np.zeros((self.nst, self.nst, self.nat_qm, self.ndim))
@@ -264,6 +285,7 @@ class Molecule(object):
             states.energy_old = states.energy
         self.nac_old = np.copy(self.nac)
         self.nacme_old = np.copy(self.nacme)
+        self.socme_old = np.copy(self.socme)
 
     def get_nr_electrons(self):
         """ Get the number of electrons

@@ -52,11 +52,490 @@ class DFT(QChem):
         """
         super().get_data(base_dir, calc_force_only)
         self.write_xyz(molecule)
-        self.get_input(molecule, bo_list, calc_force_only)
-        self.run_QM(base_dir, istep, bo_list)
-        self.extract_QM(molecule, bo_list, calc_force_only)
+        if (molecule.nT == 0):
+            self.get_input(molecule, bo_list, calc_force_only)
+            self.run_QM(base_dir, istep, bo_list)
+            self.extract_QM(molecule, bo_list, calc_force_only)
+        elif (molecule.nT > 0):
+            self.get_input_ISC(molecule, bo_list, calc_force_only)
+            self.run_QM_ISC(base_dir, molecule, istep, bo_list, calc_force_only)
+            self.extract_QM_ISC(molecule, bo_list, calc_force_only)
+
         self.move_dir(base_dir)
 
+    def get_input_ISC(self, molecule, bo_list, calc_force_only):
+        """ Generate Q-Chem input files: qchem_soc.in, qchem_singlet.in, qchem_triplet.in
+
+            :param object molecule: Molecule object
+            :param integer istep: Current MD step
+            :param integer,list bo_list: List of BO states for BO calculation
+        """
+        # Split bo_list into singlet and triplet lists
+        singlet_list = []
+        triplet_list = []
+        for ist in bo_list:
+            if (molecule.states[ist].mult == 1):
+                singlet_list.append(molecule.states[ist].sub_ist)
+            if (molecule.states[ist].mult == 3):
+                triplet_list.append(molecule.states[ist].sub_ist)
+        
+        # Make Q-Chem input file for SOC: qchem_soc.in
+        if (not calc_force_only and self.calc_coupling):
+            input_soc = ""
+
+            # Molecular information such as charge, geometry
+            input_molecule = textwrap.dedent(f"""\
+            $molecule
+            {int(molecule.charge)}  1
+            """)
+
+            for iat in range(molecule.nat_qm):
+                input_molecule += f"{molecule.symbols[iat]}"\
+                    + "".join([f"{i:15.8f}" for i in molecule.pos[iat]]) + "\n"
+            input_molecule += "$end\n\n"
+            input_soc += input_molecule
+
+            # Job control to calculate SOC
+            cis_nroot = max(molecule.nS-1, molecule.nT)
+            # Arguments about SCF, xc functional and basis set
+            input_soc += textwrap.dedent(f"""\
+            $rem
+            JOBTYPE SP
+            INPUT_BOHR TRUE
+            METHOD {self.functional}
+            BASIS {self.basis_set}
+            SCF_CONVERGENCE {self.scf_wf_tol}
+            SYMMETRY FALSE
+            SYM_IGNORE TRUE
+            """)
+            # Arguments about TDDFT and SOC
+            input_soc += textwrap.dedent(f"""\
+            CIS_N_ROOTS {cis_nroot}
+            CIS_TRIPLETS TRUE 
+            CIS_TRIPLETS TRUE 
+            CIS_CONVERGENCE {self.cis_en_tol}
+            MAX_CIS_CYCLES {self.cis_max_iter}
+            SET_ITER {self.cpscf_max_iter}
+            SET_CONV {self.cpscf_grad_tol}
+            CALC_SOC TRUE
+            $end\n\n
+            """)
+
+            file_name = "qchem_soc.in"
+            with open(file_name, "w") as f:
+                f.write(input_soc)
+        
+        # Make Q-Chem input file for NAC within singlet: qchem_singlet.in
+        input_singlet = textwrap.dedent(f"""\
+        $molecule
+        read
+        $end\n
+        """)
+        # Job control for NAC for singlet states
+        if (not calc_force_only and self.calc_coupling):
+            # Arguments about SCF, xc functional and basis set
+            input_singlet += textwrap.dedent(f"""\
+            $rem
+            JOBTYPE SP
+            INPUT_BOHR TRUE
+            METHOD {self.functional}
+            BASIS {self.basis_set}
+            SCF_GUESS READ
+            SCF_CONVERGENCE {self.scf_wf_tol}
+            SYMMETRY FALSE
+            SYM_IGNORE TRUE
+            """)
+
+            # Arguments about TDDFT and NAC for singlet states
+            input_singlet += textwrap.dedent(f"""\
+            CIS_N_ROOTS {molecule.nS-1}
+            CIS_SINGLETS TRUE
+            CIS_TRIPLETS FALSE
+            CIS_CONVERGENCE {self.cis_en_tol}
+            CIS_GUESS_DISK TRUE
+            CIS_GUESS_DISK_TYPE 2
+            MAX_CIS_CYCLES {self.cis_max_iter}
+            SET_ITER {self.cpscf_max_iter}
+            SET_CONV {self.cpscf_grad_tol}
+            """)
+            
+            if (molecule.nS > 1):
+                input_singlet += textwrap.dedent(f"""\
+                CALC_NAC TRUE
+                CIS_DER_NUMSTATE {molecule.nS}
+                $end
+
+                $derivative_coupling
+                This is comment line
+                """)
+
+                for ist in range(molecule.nS):
+                    input_singlet += f"{ist}  "
+                input_singlet += f"\n$end\n\n"
+
+            else:
+                input_singlet += f"$end\n\n"
+            
+            
+        # Job control for force calculation
+        input_force = ""
+        guess = "READ"
+        for ist in singlet_list:
+            if (not calc_force_only and self.calc_coupling):
+                input_force += textwrap.dedent(f"""\
+                @@@
+
+                $molecule
+                read
+                $end
+
+                """)
+            
+            
+            input_force += textwrap.dedent(f"""\
+            $rem
+            JOBTYPE force
+            INPUT_BOHR TRUE
+            METHOD {self.functional}
+            BASIS {self.basis_set}
+            SCF_GUESS {guess}
+            SYMMETRY FALSE
+            SYM_IGNORE TRUE
+            """)
+            
+            # When ground state force is calculated, Q-Chem doesn't need CIS option.
+            if (ist != 0):
+                input_force += textwrap.dedent(f"""\
+                CIS_N_ROOTS {molecule.nS-1}
+                CIS_STATE_DERIV {ist}
+                CIS_SINGLETS TRUE
+                CIS_TRIPLETS FALSE
+                CIS_CONVERGENCE {self.cis_en_tol}
+                MAX_CIS_CYCLES {self.cis_max_iter}
+                SET_ITER {self.cpscf_max_iter}
+                SET_CONV {self.cpscf_grad_tol}
+                CIS_GUESS_DISK TRUE
+                CIS_GUESS_DISK_TYPE 2
+                SKIP_CIS_RPA TRUE
+                """)
+            input_force += "$end\n\n"
+        input_singlet += input_force
+
+        file_name = "qchem_singlet.in"
+        if ((not calc_force_only) or (calc_force_only and len(singlet_list) > 0)):
+            with open(file_name, "w") as f:
+                f.write(input_singlet)
+        
+        # Make Q-Chem input file for NAC within triplet: qchem_triplet.in
+        input_triplet = textwrap.dedent(f"""\
+        $molecule
+        read
+        $end\n
+        """)
+        # Job control for NAC for singlet states
+        if (not calc_force_only and self.calc_coupling):
+            # Arguments about SCF, xc functional and basis set
+            input_triplet += textwrap.dedent(f"""\
+            $rem
+            JOBTYPE SP
+            INPUT_BOHR TRUE
+            METHOD {self.functional}
+            BASIS {self.basis_set}
+            SCF_GUESS READ
+            SCF_CONVERGENCE {self.scf_wf_tol}
+            SYMMETRY FALSE
+            SYM_IGNORE TRUE
+            """)
+
+            # Arguments about TDDFT and NAC for triplet states
+            input_triplet += textwrap.dedent(f"""\
+            CIS_N_ROOTS {molecule.nT}
+            CIS_SINGLETS FALSE
+            CIS_TRIPLETS TRUE
+            CIS_CONVERGENCE {self.cis_en_tol}
+            CIS_GUESS_DISK TRUE
+            CIS_GUESS_DISK_TYPE 0
+            MAX_CIS_CYCLES {self.cis_max_iter}
+            SET_ITER {self.cpscf_max_iter}
+            SET_CONV {self.cpscf_grad_tol}
+            """)
+            if (molecule.nT > 1):
+                input_triplet += textwrap.dedent(f"""\
+                CALC_NAC TRUE
+                CIS_DER_NUMSTATE {molecule.nT}
+                $end
+
+                $derivative_coupling
+                This is comment line
+                """)
+
+                for ist in range(molecule.nT):
+                    input_triplet += f"{ist+1}  "
+                input_triplet += f"\n$end\n\n"
+
+            else:
+                input_triplet += textwrap.dedent(f"""\
+                CIS_RELAXED_DENSITY TRUE
+                $end\n
+                """)
+        
+        # Job control for force calculation
+        input_force = ""
+        guess = "READ"
+        for ist in triplet_list:
+            if (not calc_force_only and self.calc_coupling):
+                input_force += textwrap.dedent(f"""\
+                @@@
+
+                $molecule
+                read
+                $end
+
+
+                """)
+            
+            
+            input_force += textwrap.dedent(f"""\
+            $rem
+            JOBTYPE force
+            INPUT_BOHR TRUE
+            METHOD {self.functional}
+            BASIS {self.basis_set}
+            SCF_GUESS {guess}
+            SYMMETRY FALSE
+            SYM_IGNORE TRUE
+            """)
+            
+            input_force += textwrap.dedent(f"""\
+            CIS_N_ROOTS {molecule.nT}
+            CIS_STATE_DERIV {ist+1}
+            CIS_SINGLETS FALSE
+            CIS_TRIPLETS TRUE
+            CIS_CONVERGENCE {self.cis_en_tol}
+            MAX_CIS_CYCLES {self.cis_max_iter}
+            SET_ITER {self.cpscf_max_iter}
+            SET_CONV {self.cpscf_grad_tol}
+            CIS_GUESS_DISK TRUE
+            CIS_GUESS_DISK_TYPE 0
+            SKIP_CIS_RPA TRUE
+            """)
+            input_force += "$end\n\n"
+        input_triplet += input_force
+
+        file_name = "qchem_triplet.in"
+        if ((not calc_force_only) or (calc_force_only and len(triplet_list) > 0)):
+            with open(file_name, "w") as f:
+                f.write(input_triplet)
+
+
+    def run_QM_ISC(self, base_dir, molecule, istep, bo_list, calc_force_only):
+        """ Run (TD)DFT calculation and save the output files to qm_log directory
+
+            :param string base_dir: Base directory
+            :param integer istep: Current MD step
+            :param integer,list bo_list: List of BO states for BO calculation
+        """
+        # Set environment variable 
+        os.environ["QC"] = self.root_path
+        path_qcenv = os.path.join(self.root_path, "qcenv.sh")
+        command = f'env -i bash -c "source {path_qcenv} && env"'
+        for line in subprocess.getoutput(command).split("\n"):
+            key, value = line.split("=")
+            os.environ[key] = value
+        os.environ["QCSCRATCH"] = self.scr_qm_dir
+        os.environ["QCLOCALSCR"] = self.scr_qm_dir
+        
+        # Split bo_list into singlet and triplet lists
+        singlet_list = []
+        triplet_list = []
+        for ist in bo_list:
+            if (molecule.states[ist].mult == 1):
+                singlet_list.append(molecule.states[ist].sub_ist)
+            if (molecule.states[ist].mult == 3):
+                triplet_list.append(molecule.states[ist].sub_ist)
+
+        # Run SOC calc
+        if (not calc_force_only):
+            qm_exec_command = f"$QC/bin/qchem -nt {self.nthreads} -save qchem_soc.in log_soc save_soc > qcprog_soc.info "
+            os.system(qm_exec_command)
+            os.system("cp -r save_soc save_singlet")
+            os.system("cp -r save_soc save_triplet")
+            os.system("cat log_soc > log")
+
+        # Run singlet NAC (and force) calculation
+        if ((not calc_force_only) or (calc_force_only and len(singlet_list) > 0)):
+            qm_exec_command = f"$QC/bin/qchem -nt {self.nthreads} -save qchem_singlet.in log_singlet save_singlet >> qcprog_singlet.info "
+            os.system(qm_exec_command)
+            if (calc_force_only):
+                os.system("cat log_singlet > log")
+            else:
+                os.system("cat log_singlet >> log")
+
+        # Run triplet NAC (and force) calculation
+        if ((not calc_force_only) or (calc_force_only and len(triplet_list) > 0)):
+            qm_exec_command = f"$QC/bin/qchem -nt {self.nthreads} -save qchem_triplet.in log_triplet save_triplet >> qcprog_triplet.info "
+            os.system(qm_exec_command)
+            if (calc_force_only):
+                os.system("cat log_triplet > log")
+            else:
+                os.system("cat log_triplet >> log")
+        
+        tmp_dir = os.path.join(base_dir, "qm_log")
+        if (os.path.exists(tmp_dir)):
+            log_step = f"log.{istep + 1}.{bo_list[0]}"
+            shutil.copy("log", os.path.join(tmp_dir, log_step))
+        
+    def extract_QM_ISC(self, molecule, bo_list, calc_force_only):
+        """ Read the output files to get BO information
+
+            :param object molecule: Molecule object
+            :param integer,list bo_list: List of BO states for BO calculation
+            :param boolean calc_force_only: Logical to decide whether calculate force only
+        """
+        # Split bo_list into singlet and triplet lists
+        singlet_list = []
+        triplet_list = []
+        for ist in bo_list:
+            if (molecule.states[ist].mult == 1):
+                singlet_list.append(molecule.states[ist].sub_ist)
+            if (molecule.states[ist].mult == 3):
+                triplet_list.append(molecule.states[ist].sub_ist)
+        
+        log_soc = ""
+        if (not calc_force_only):
+            file_name = "log_soc"
+            with open(file_name, "r") as f:
+                log_soc = f.read()
+        
+        log_singlet = ""
+        if ((len(singlet_list) > 0) or (not calc_force_only)):
+            file_name = "log_singlet"
+            with open(file_name, "r") as f:
+                log_singlet = f.read()
+
+        log_triplet = ""
+        if ((len(triplet_list) > 0) or (not calc_force_only)):
+            file_name = "log_triplet"
+            with open(file_name, "r") as f:
+                log_triplet = f.read()
+
+        if (not calc_force_only):
+            # Ground state energy
+            energy = re.findall('Total energy in the final basis set =\s*([-]*\S*)', log_soc)
+            energy = np.array(energy, dtype=np.float64)
+            molecule.states[0].energy = energy[0]
+
+            # Singlet excited state energy
+            if (molecule.nst > 1):
+                energy = re.findall('Total energy for state\s*\d*.\s*([-]*\S*)', log_singlet)
+                energy = np.array(energy, dtype=np.float64)
+
+                for ist, en in enumerate(energy):
+                    if ist < molecule.nS - 1:
+                        molecule.states[ist + 1].energy = en
+            
+            # Triplet excited state energy
+            if (molecule.nst > 1):
+                energy = re.findall('Total energy for state\s*\d*.\s*([-]*\S*)', log_triplet)
+                energy = np.array(energy, dtype=np.float64)
+
+                for ist, en in enumerate(energy):
+                    if ist < molecule.nT:
+                        molecule.states[ist + molecule.nS].energy = en
+        # Adiabatic force 
+        tmp_f = "Gradient of\D*\s*" 
+        num_line = int(molecule.nat_qm / 6)
+        if (num_line >= 1):
+            tmp_f += ("\s*\d*\s*\d*\s*\d*\s*\d*\s*\d*\s*\d*"
+                 + ("\s*\d?\s*" + "([-]*\S*)\s*" * 6) * 3) * num_line
+
+        dnum = molecule.nat_qm % 6
+        tmp_f += "\s*\d*" * dnum
+        tmp_f += ("\s*\d?\s*" + "([-]*\S*)\s*" * dnum) * 3
+
+        force = re.findall(tmp_f, log_singlet+log_triplet)
+        force = np.array(force, dtype=np.float64)
+
+        # Q-Chem provides energy gradient not force
+        force = -force
+
+        for index, ist in enumerate(bo_list):
+            iline = 0; iiter = 0
+            for iiter in range(num_line):
+                tmp_force = np.transpose(force[index][18 * iiter:18 * (iiter + 1)].reshape(3, 6, order="C"))
+                for iat in range(6):
+                    molecule.states[ist].force[6 * iline + iat] = np.copy(tmp_force[iat])
+                iline += 1
+
+            if (dnum != 0):
+                if (num_line != 0):
+                    tmp_force = np.transpose(force[index][18 * (iiter + 1):].reshape(3, dnum, order="C"))
+                else:
+                    tmp_force = np.transpose(force[index][0:].reshape(3, dnum, order="C"))
+
+                for iat in range(dnum):
+                    molecule.states[ist].force[6 * iline + iat] = np.copy(tmp_force[iat])
+        # NACs
+        if (not calc_force_only and self.calc_coupling):
+            tmp_nac = "with ETF[:]*\s*Atom\s*X\s*Y\s*Z\s*[-]*" + ("\s*\d*\s*" + "([-]*\S*)\s*"*3) * molecule.nat_qm
+            nac = re.findall(tmp_nac, log_singlet+log_triplet)
+            nac = np.array(nac, dtype=np.float64)
+
+            kst = 0
+            
+            molecule.nac[:, :] = 0.0
+            
+            # Singlet states
+            for ist in range(molecule.nS):
+                for jst in range(ist + 1, molecule.nS):
+                    molecule.nac[ist, jst] = nac[kst].reshape(molecule.nat_qm, 3, order='C')
+                    molecule.nac[jst, ist] = - molecule.nac[ist, jst]
+                    kst += 1
+
+            # Triplet states
+            for ist in range(molecule.nT):
+                for jst in range(ist + 1, molecule.nT):
+                    ist_tot = ist + molecule.nS
+                    jst_tot = jst + molecule.nS
+                    molecule.nac[ist_tot, jst_tot] = nac[kst].reshape(molecule.nat_qm, 3, order='C')
+                    molecule.nac[jst_tot, ist_tot] = - molecule.nac[ist_tot, jst_tot]
+                    kst += 1
+
+        # SOCs
+        if (not calc_force_only and self.calc_coupling):
+            
+            molecule.socme[:, :] = 0.0
+            
+            # Between ground state and triplet states
+            tmp_soc = "Total SOC between the singlet ground state.*"
+            for ist in range(molecule.nT):
+                tmp_soc += f"\nT{ist+1}\s*(\d+.\d*).*"
+            soc = re.findall(tmp_soc, log_soc)
+            soc = np.array(soc, dtype=np.float64).flatten()
+            molecule.socme[0, molecule.nS:molecule.nst] = soc[:] 
+            molecule.socme[molecule.nS:molecule.nst, 0] = soc[:] 
+            
+            # Between singlet excited states and triplet states
+            for ist in range(molecule.nS-1):
+                tmp_soc = f"Total SOC between the S{ist+1} state.*"
+                for jst in range(molecule.nT):
+                    tmp_soc += f"\nT{jst+1}\s*(\d+.\d*).*"
+                soc = re.findall(tmp_soc, log_soc)
+                soc = np.array(soc, dtype=np.float64).flatten()
+                molecule.socme[ist+1, molecule.nS:molecule.nst] = soc[:] 
+                molecule.socme[molecule.nS:molecule.nst, ist+1] = soc[:] 
+
+            # Between triplet states and triplet states
+            for ist in range(molecule.nT-1):
+                tmp_soc = f"Total SOC between the T{ist+1} state.*"
+                for jst in range(ist+1, molecule.nT):
+                    tmp_soc += f"\nT{jst+1}\s*(\d+.\d*).*"
+                soc = re.findall(tmp_soc, log_soc)
+                soc = np.array(soc, dtype=np.float64).flatten()
+                molecule.socme[ist+molecule.nS, ist+molecule.nS+1:molecule.nst] = soc[:]
+                molecule.socme[ist+molecule.nS+1:molecule.nst, ist+molecule.nS] = soc[:]
+            molecule.socme *= 4.55633 * 10 ** -6
+    
     def get_input(self, molecule, bo_list, calc_force_only):
         """ Generate Q-Chem input files: qchem.in
 
