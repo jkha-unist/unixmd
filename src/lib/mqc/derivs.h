@@ -21,28 +21,26 @@ static double dot(int nst, double complex *u, double complex *v){
 }
 
 // Routine to calculate cdot contribution originated from Ehrenfest term
-static void cdot(int nst, double *e, double **dv, double complex *c, double complex *c_dot){
-
-    double complex *na_term = malloc(nst * sizeof(double complex));
+// Workspace: na_term_work[nst] (pre-allocated by caller)
+static void cdot(int nst, double *e, double **dv, double complex *c, double complex *c_dot,
+    double complex *na_term_work){
 
     int ist, jst;
     double egs;
 
     for(ist = 0; ist < nst; ist++){
-        na_term[ist] = 0.0 + 0.0 * I;
+        na_term_work[ist] = 0.0 + 0.0 * I;
         for(jst = 0; jst < nst; jst++){
             if(ist != jst){
-                na_term[ist] -= dv[ist][jst] * c[jst];
+                na_term_work[ist] -= dv[ist][jst] * c[jst];
             }
         }
     }
 
     egs = e[0];
     for(ist = 0; ist < nst; ist++){
-        c_dot[ist] = - 1.0 * I * c[ist] * (e[ist] - egs) + na_term[ist];
+        c_dot[ist] = - 1.0 * I * c[ist] * (e[ist] - egs) + na_term_work[ist];
     }
-
-    free(na_term);
 
 }
 

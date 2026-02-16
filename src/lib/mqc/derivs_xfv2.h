@@ -18,12 +18,10 @@ static void xfpc_cdot(int nst, int *l_coh, double **epc, double complex *c, doub
 }
 
 // Routine to calculate cdot contribution originated from XF term
+// Workspace arrays (pre-allocated by caller): avg_pos[nat][ndim], dec[nst][nst], rho_work[nst]
 static void xf_cdot(int nat, int ndim, int nst, int *l_coh, int l_crunch, double *mass, double *sigma,
-    double **pos, double ***aux_pos, double ***phase, double ****qmom, double complex *c, double complex *xfcdot){
-
-    double **avg_pos = malloc(nat * sizeof(double*));
-    double **dec = malloc(nst * sizeof(double*));
-    double *rho = malloc(nst * sizeof(double));
+    double **pos, double ***aux_pos, double ***phase, double ****qmom, double complex *c, double complex *xfcdot,
+    double **avg_pos, double **dec, double *rho_work){
 
     int ist, jst, iat, isp;
 
@@ -39,14 +37,12 @@ static void xf_cdot(int nat, int ndim, int nst, int *l_coh, int l_crunch, double
     }
 
     for(iat = 0; iat < nat; iat++){
-        avg_pos[iat] = malloc(ndim * sizeof(double));
         for(isp = 0; isp < ndim; isp++){
             avg_pos[iat][isp] = 0.0;
         }
     }
-    
+
     for(ist = 0; ist < nst; ist++){
-        dec[ist] = malloc(nst * sizeof(double));
         for(jst = 0; jst < nst; jst++){
             dec[ist][jst] = 0.0;
         }
@@ -54,11 +50,11 @@ static void xf_cdot(int nat, int ndim, int nst, int *l_coh, int l_crunch, double
 
     // Calculate densities from current coefficients
     for(ist = 0; ist < nst; ist++){
-        rho[ist] = creal(conj(c[ist]) * c[ist]);
+        rho_work[ist] = creal(conj(c[ist]) * c[ist]);
         if(l_coh[ist] == 1){
             for(iat = 0; iat < nat; iat++){
                 for(isp = 0; isp < ndim; isp++){
-                    avg_pos[iat][isp] += aux_pos[ist][iat][isp] * rho[ist];
+                    avg_pos[iat][isp] += aux_pos[ist][iat][isp] * rho_work[ist];
                 }
             }
         }
@@ -71,9 +67,9 @@ static void xf_cdot(int nat, int ndim, int nst, int *l_coh, int l_crunch, double
                 if(l_coh[ist] == 1 && l_coh[jst] == 1){
                     for(iat = 0; iat < nat; iat++){
                         for(isp = 0; isp < ndim; isp++){
-                            qmom[ist][jst][iat][isp] = 
+                            qmom[ist][jst][iat][isp] =
                                 - (pos[iat][isp] - aux_pos[ist][iat][isp] - aux_pos[jst][iat][isp] + avg_pos[iat][isp])
-                                / pow(sigma[iat], 2.0) / mass[iat];
+                                / (sigma[iat] * sigma[iat] * mass[iat]);
                             qmom[jst][ist][iat][isp] = qmom[ist][jst][iat][isp];
                         }
                     }
@@ -88,9 +84,9 @@ static void xf_cdot(int nat, int ndim, int nst, int *l_coh, int l_crunch, double
                     for(iat = 0; iat < nat; iat++){
                         for(isp = 0; isp < ndim; isp++){
                             qmom[ist][jst][iat][isp] = - (pos[iat][isp] - avg_pos[iat][isp])
-                                / pow(sigma[iat], 2.0) / mass[iat];
+                                / (sigma[iat] * sigma[iat] * mass[iat]);
                             qmom[jst][ist][iat][isp] = - (pos[iat][isp] - avg_pos[iat][isp])
-                                / pow(sigma[iat], 2.0) / mass[iat];
+                                / (sigma[iat] * sigma[iat] * mass[iat]);
                         }
                     }
                 }
@@ -117,20 +113,9 @@ static void xf_cdot(int nat, int ndim, int nst, int *l_coh, int l_crunch, double
     for(ist = 0; ist < nst; ist++){
         xfcdot[ist] = 0.0 + 0.0 * I;
         for(jst = 0; jst < nst; jst++){
-            xfcdot[ist] -= 0.5 * dec[ist][jst] * rho[jst] * c[ist];
+            xfcdot[ist] -= 0.5 * dec[ist][jst] * rho_work[jst] * c[ist];
         }
     }
-
-    // Deallocate temporary arrays
-    for(ist = 0; ist < nst; ist++){
-        free(dec[ist]);
-    }
-    for(iat = 0; iat < nat; iat++){
-        free(avg_pos[iat]);
-    }
-    free(dec);
-    free(rho);
-    free(avg_pos);
 
 }
 
@@ -172,7 +157,7 @@ static void xf_rhodot(int nat, int ndim, int nst, int *l_coh, double *mass, doub
             for(iat = 0; iat < nat; iat++){
                 for(isp = 0; isp < ndim; isp++){
                     qmom[iat][isp] += 0.5 * creal(rho[ist][ist]) * (pos[iat][isp] - aux_pos[ist][iat][isp])
-                        / pow(sigma[iat], 2.0) / mass[iat];
+                        / (sigma[iat] * sigma[iat] * mass[iat]);
                 }
             }
         }

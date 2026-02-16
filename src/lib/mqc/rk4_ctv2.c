@@ -48,9 +48,23 @@ static void rk4_coef(int nst, int nesteps, double dt, double *energy, double *en
     int ist, jst, iestep;
     double frac, edt, norm;
 
+    // Precomputed RK4 constants
+    const double sqrt2 = 1.41421356237309504880;
+    const double rk_c1 = 0.5 * (-1.0 + sqrt2);
+    const double rk_c2 = 1.0 - 0.5 * sqrt2;
+    const double rk_c3 = -0.5 * sqrt2;
+    const double rk_c4 = 1.0 + 0.5 * sqrt2;
+    const double rk_c5 = 2.0 - sqrt2;
+    const double rk_c6 = 2.0 + sqrt2;
+
     for(ist = 0; ist < nst; ist++){
         dv[ist] = malloc(nst * sizeof(double));
     }
+
+    // Workspace for ct_cdot - allocated once
+    double complex *ct_na_term = malloc(nst * sizeof(double complex));
+    double *ct_ct_term = malloc(nst * sizeof(double));
+    double *ct_rho = malloc(nst * sizeof(double));
 
     frac = 1.0 / (double)nesteps;
     edt = dt * frac;
@@ -66,7 +80,7 @@ static void rk4_coef(int nst, int nesteps, double dt, double *energy, double *en
         }
 
         // Calculate k1
-        ct_cdot(nst, eenergy, dv, k_lk, coef, c_dot);
+        ct_cdot(nst, eenergy, dv, k_lk, coef, c_dot, ct_na_term, ct_ct_term, ct_rho);
 
         for(ist = 0; ist < nst; ist++){
             k1[ist] = edt * c_dot[ist];
@@ -75,30 +89,29 @@ static void rk4_coef(int nst, int nesteps, double dt, double *energy, double *en
         }
 
         // Calculate k2
-        ct_cdot(nst, eenergy, dv, k_lk, coef_new, c_dot);
+        ct_cdot(nst, eenergy, dv, k_lk, coef_new, c_dot, ct_na_term, ct_ct_term, ct_rho);
 
         for(ist = 0; ist < nst; ist++){
             k2[ist] = edt * c_dot[ist];
-            kfunction[ist] = 0.5 * (- 1.0 + sqrt(2.0)) * k1[ist] + (1.0 - 0.5 * sqrt(2.0)) * k2[ist];
+            kfunction[ist] = rk_c1 * k1[ist] + rk_c2 * k2[ist];
             coef_new[ist] = coef[ist] + kfunction[ist];
         }
 
         // Calculate k3
-        ct_cdot(nst, eenergy, dv, k_lk, coef_new, c_dot);
+        ct_cdot(nst, eenergy, dv, k_lk, coef_new, c_dot, ct_na_term, ct_ct_term, ct_rho);
 
         for(ist = 0; ist < nst; ist++){
             k3[ist] = edt * c_dot[ist];
-            kfunction[ist] = - 0.5 * sqrt(2.0) * k2[ist] + (1.0 + 0.5 * sqrt(2.0)) * k3[ist];
+            kfunction[ist] = rk_c3 * k2[ist] + rk_c4 * k3[ist];
             coef_new[ist] = coef[ist] + kfunction[ist];
         }
 
         // Calculate k4
-        ct_cdot(nst, eenergy, dv, k_lk, coef_new, c_dot);
+        ct_cdot(nst, eenergy, dv, k_lk, coef_new, c_dot, ct_na_term, ct_ct_term, ct_rho);
 
         for(ist = 0; ist < nst; ist++){
             k4[ist] = edt * c_dot[ist];
-            variation[ist] = (k1[ist] + (2.0 - sqrt(2.0)) * k2[ist] + (2.0 + sqrt(2.0))
-                * k3[ist] + k4[ist]) / 6.0;
+            variation[ist] = (k1[ist] + rk_c5 * k2[ist] + rk_c6 * k3[ist] + k4[ist]) / 6.0;
             coef_new[ist] = coef[ist] + variation[ist];
         }
 
@@ -128,6 +141,9 @@ static void rk4_coef(int nst, int nesteps, double dt, double *energy, double *en
     for(ist = 0; ist < nst; ist++){
         free(dv[ist]);
     }
+    free(ct_na_term);
+    free(ct_ct_term);
+    free(ct_rho);
 
     free(k1);
     free(k2);

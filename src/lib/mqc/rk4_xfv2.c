@@ -62,7 +62,15 @@ static void rk4_coef(int nat, int ndim, int nst, int nesteps, double dt, int *l_
     double **epc = malloc(nst * sizeof(double*));
     int ist, jst, iat, idim, iestep;
     double frac, edt, norm;
-    
+
+    // Precomputed RK4 constants
+    const double sqrt2 = 1.41421356237309504880;
+    const double rk_c1 = 0.5 * (-1.0 + sqrt2);
+    const double rk_c2 = 1.0 - 0.5 * sqrt2;
+    const double rk_c3 = -0.5 * sqrt2;
+    const double rk_c4 = 1.0 + 0.5 * sqrt2;
+    const double rk_c5 = 2.0 - sqrt2;
+    const double rk_c6 = 2.0 + sqrt2;
 
     for(ist = 0; ist < nst; ist++){
         dv[ist] = malloc(nst * sizeof(double));
@@ -81,9 +89,23 @@ static void rk4_coef(int nat, int ndim, int nst, int nesteps, double dt, int *l_
         epos[iat] = malloc(ndim * sizeof(double));
     }
 
+    // Workspace for xf_cdot - allocated once
+    double **xf_avg_pos = malloc(nat * sizeof(double*));
+    double **xf_dec = malloc(nst * sizeof(double*));
+    double *xf_rho = malloc(nst * sizeof(double));
+    for(iat = 0; iat < nat; iat++){
+        xf_avg_pos[iat] = malloc(ndim * sizeof(double));
+    }
+    for(ist = 0; ist < nst; ist++){
+        xf_dec[ist] = malloc(nst * sizeof(double));
+    }
+
+    // Workspace for cdot - allocated once
+    double complex *cdot_na_term = malloc(nst * sizeof(double complex));
+
     frac = 1.0 / (double)nesteps;
     edt = dt * frac;
-    
+
 
     for(iestep = 0; iestep < nesteps; iestep++){
 
@@ -121,8 +143,8 @@ static void rk4_coef(int nat, int ndim, int nst, int nesteps, double dt, int *l_
         }
 
         // Calculate k1
-        cdot(nst, eenergy, dv, coef, c_dot);
-        xf_cdot(nat, ndim, nst, l_coh, l_crunch, mass, sigma, epos, eaux_pos, ephase, qmom, coef, xf_c_dot);
+        cdot(nst, eenergy, dv, coef, c_dot, cdot_na_term);
+        xf_cdot(nat, ndim, nst, l_coh, l_crunch, mass, sigma, epos, eaux_pos, ephase, qmom, coef, xf_c_dot, xf_avg_pos, xf_dec, xf_rho);
         if(t_pc == 2){
             xfpc_cdot(nst, l_coh, epc, coef, xfpc_c_dot);
         }
@@ -134,42 +156,41 @@ static void rk4_coef(int nat, int ndim, int nst, int nesteps, double dt, int *l_
         }
 
         // Calculate k2
-        cdot(nst, eenergy, dv, coef_new, c_dot);
-        xf_cdot(nat, ndim, nst, l_coh, l_crunch, mass, sigma, epos, eaux_pos, ephase, qmom, coef_new, xf_c_dot);
+        cdot(nst, eenergy, dv, coef_new, c_dot, cdot_na_term);
+        xf_cdot(nat, ndim, nst, l_coh, l_crunch, mass, sigma, epos, eaux_pos, ephase, qmom, coef_new, xf_c_dot, xf_avg_pos, xf_dec, xf_rho);
         if(t_pc == 2){
             xfpc_cdot(nst, l_coh, epc, coef_new, xfpc_c_dot);
         }
         
         for(ist = 0; ist < nst; ist++){
             k2[ist] = edt * (c_dot[ist] + xf_c_dot[ist] + xfpc_c_dot[ist]);
-            kfunction[ist] = 0.5 * (- 1.0 + sqrt(2.0)) * k1[ist] + (1.0 - 0.5 * sqrt(2.0)) * k2[ist];
+            kfunction[ist] = rk_c1 * k1[ist] + rk_c2 * k2[ist];
             coef_new[ist] = coef[ist] + kfunction[ist];
         }
 
         // Calculate k3
-        cdot(nst, eenergy, dv, coef_new, c_dot);
-        xf_cdot(nat, ndim, nst, l_coh, l_crunch, mass, sigma, epos, eaux_pos, ephase, qmom, coef_new, xf_c_dot);
+        cdot(nst, eenergy, dv, coef_new, c_dot, cdot_na_term);
+        xf_cdot(nat, ndim, nst, l_coh, l_crunch, mass, sigma, epos, eaux_pos, ephase, qmom, coef_new, xf_c_dot, xf_avg_pos, xf_dec, xf_rho);
         if(t_pc == 2){
             xfpc_cdot(nst, l_coh, epc, coef_new, xfpc_c_dot);
         }
 
         for(ist = 0; ist < nst; ist++){
             k3[ist] = edt * (c_dot[ist] + xf_c_dot[ist] + xfpc_c_dot[ist]);
-            kfunction[ist] = - 0.5 * sqrt(2.0) * k2[ist] + (1.0 + 0.5 * sqrt(2.0)) * k3[ist];
+            kfunction[ist] = rk_c3 * k2[ist] + rk_c4 * k3[ist];
             coef_new[ist] = coef[ist] + kfunction[ist];
         }
 
         // Calculate k4
-        cdot(nst, eenergy, dv, coef_new, c_dot);
-        xf_cdot(nat, ndim, nst, l_coh, l_crunch, mass, sigma, epos, eaux_pos, ephase, qmom, coef_new, xf_c_dot);
+        cdot(nst, eenergy, dv, coef_new, c_dot, cdot_na_term);
+        xf_cdot(nat, ndim, nst, l_coh, l_crunch, mass, sigma, epos, eaux_pos, ephase, qmom, coef_new, xf_c_dot, xf_avg_pos, xf_dec, xf_rho);
         if(t_pc == 2){
             xfpc_cdot(nst, l_coh, epc, coef_new, xfpc_c_dot);
         }
 
         for(ist = 0; ist < nst; ist++){
             k4[ist] = edt * (c_dot[ist] + xf_c_dot[ist] + xfpc_c_dot[ist]);
-            variation[ist] = (k1[ist] + (2.0 - sqrt(2.0)) * k2[ist] + (2.0 + sqrt(2.0))
-                * k3[ist] + k4[ist]) / 6.0;
+            variation[ist] = (k1[ist] + rk_c5 * k2[ist] + rk_c6 * k3[ist] + k4[ist]) / 6.0;
             coef_new[ist] = coef[ist] + variation[ist];
         }
 
@@ -190,7 +211,15 @@ static void rk4_coef(int nat, int ndim, int nst, int nesteps, double dt, int *l_
     for(ist = 0; ist < nst; ist++){
         free(dv[ist]);
         free(epc[ist]);
+        free(xf_dec[ist]);
     }
+    for(iat = 0; iat < nat; iat++){
+        free(xf_avg_pos[iat]);
+    }
+    free(xf_avg_pos);
+    free(xf_dec);
+    free(xf_rho);
+    free(cdot_na_term);
 
     free(k1);
     free(k2);

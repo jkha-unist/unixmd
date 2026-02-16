@@ -21,41 +21,37 @@ static double dot(int nst, double complex *u, double complex *v){
 }
 
 // Routine to calculate cdot contribution originated from Ehrenfest term
-static void ct_cdot(int nst, double *e, double **dv, double **k_lk, double complex *c, double complex *c_dot){
-
-    double complex *na_term = malloc(nst * sizeof(double complex));
-    double *ct_term = malloc(nst * sizeof(double));
-    double *rho = malloc(nst * sizeof (double));
+// Workspace: na_term_work[nst], ct_term_work[nst], rho_work[nst] (pre-allocated by caller)
+static void ct_cdot(int nst, double *e, double **dv, double **k_lk, double complex *c, double complex *c_dot,
+    double complex *na_term_work, double *ct_term_work, double *rho_work){
 
     int ist, jst;
     double egs;
 
     // Calculate densities from current coefficients
     for(ist = 0; ist < nst; ist++){
-        rho[ist] = creal(conj(c[ist]) * c[ist]);
+        rho_work[ist] = creal(conj(c[ist]) * c[ist]);
     }
 
     for(ist = 0; ist < nst; ist++){
-        na_term[ist] = 0.0 + 0.0 * I;
-        ct_term[ist] = 0.0;
+        na_term_work[ist] = 0.0 + 0.0 * I;
+        ct_term_work[ist] = 0.0;
         for(jst = 0; jst < nst; jst++){
             if(ist != jst){
-                na_term[ist] -= dv[ist][jst] * c[jst];
-                //ct_term[ist] += 0.25 * (k_lk[jst][ist] - k_lk[ist][jst]) * rho[jst]
-                //    * (rho[ist] + rho[jst]) / (nst - 1);
-                ct_term[ist] -= k_lk[ist][jst] * rho[jst];
-                
+                na_term_work[ist] -= dv[ist][jst] * c[jst];
+                //ct_term_work[ist] += 0.25 * (k_lk[jst][ist] - k_lk[ist][jst]) * rho_work[jst]
+                //    * (rho_work[ist] + rho_work[jst]) / (nst - 1);
+                ct_term_work[ist] -= k_lk[ist][jst] * rho_work[jst];
+
             }
         }
     }
 
     egs = e[0];
     for(ist = 0; ist < nst; ist++){
-        c_dot[ist] = - 1.0 * I * c[ist] * (e[ist] - egs) + na_term[ist] + ct_term[ist] * c[ist];
+        c_dot[ist] = - 1.0 * I * c[ist] * (e[ist] - egs) + na_term_work[ist] + ct_term_work[ist] * c[ist];
     }
 
-    free(na_term);
-    free(ct_term);
 }
 
 /*
