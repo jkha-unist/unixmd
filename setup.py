@@ -1,3 +1,20 @@
+"""
+PyUNIxMD Setup Script
+
+This script builds the Cython extensions required for PyUNIxMD.
+
+Required dependencies:
+    - numpy
+    - cython
+
+Optional dependencies for GPU acceleration:
+    - torch (PyTorch): Enables GPU acceleration for CTv2 cross-trajectory calculations
+      Install with: pip install torch
+      Supports: Apple Silicon (MPS), NVIDIA GPUs (CUDA), and CPU fallback
+
+Math library configuration (lines below):
+    Edit math_lib_type and math_lib_dir to match your system configuration.
+"""
 from distutils.core import setup
 from distutils.extension import Extension
 from Cython.Distutils import build_ext

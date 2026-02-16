@@ -1,6 +1,7 @@
 from __future__ import division
 from lib.libctmqcv2 import el_run
 from mqc.mqc import MQC
+from mqc.gpu_backend import get_backend
 from misc import eps, au_to_K, au_to_A, call_name, typewriter, gaussian1d, close_files
 import os, shutil, textwrap
 import numpy as np
@@ -37,6 +38,7 @@ class CTv2(MQC):
         :param double x_fin: Define asymptotic region (a.u.)
         :param boolean l_real_pop: Use |C_j|^2 for |chi_j|^2/|chi|^2 in quantum momentum calculation.
         :param integer t_pc: Phase correction scheme (1: use P, 2: use sum_j nabla S_j)
+        :param use_gpu: GPU acceleration mode. 'auto' (detect GPU), True (force GPU), False (force CPU)
     """
     def __init__(self, molecules, thermostat=None, istates=None, dt=0.5, nsteps=1000, nesteps=20, \
         elec_object="coefficient", propagator="rk4", l_print_dm=True, l_adj_nac=True, rho_threshold=0.01, \
@@ -44,7 +46,7 @@ class CTv2(MQC):
         l_crunch=True, l_dc_w_mom=True, l_traj_gaussian=False, \
         t_cons=2, l_etot0=True, l_lap=False,\
         l_en_cons=False, artifact_expon=0.2, l_asymp=False, x_fin=25.0, \
-        l_real_pop=True, t_pc=1):
+        l_real_pop=True, t_pc=1, use_gpu='auto'):
         # Save name of MQC dynamics
         self.md_type = self.__class__.__name__
 
@@ -139,9 +141,23 @@ class CTv2(MQC):
         # Variables for aborting dynamics when all trajectories reach asymptotic region
         self.l_asymp = l_asymp
         self.x_fin = x_fin
-        
+
         # Initialize event to print
         self.event = {"DECO": []}
+
+        # Initialize GPU backend for cross-trajectory calculations
+        self.gpu = get_backend(use_gpu)
+        self.use_gpu = (self.gpu.backend == 'torch')
+
+        if self.use_gpu:
+            try:
+                from mqc import ctv2_gpu
+                self._gpu_kernels = ctv2_gpu.CTv2GPUKernels(self.gpu)
+            except ImportError:
+                self.use_gpu = False
+                self._gpu_kernels = None
+        else:
+            self._gpu_kernels = None
 
     def run(self, qm, mm=None, output_dir="./", l_save_qm_log=False, l_save_mm_log=False, l_save_scr=True, restart=None):
         """ Run MQC dynamics according to CTMQC dynamics
@@ -693,6 +709,12 @@ class CTv2(MQC):
     def calculate_slope(self):
         """ Routine to calculate slope
         """
+        # Use GPU-accelerated version if available
+        if self.use_gpu and self._gpu_kernels is not None:
+            self._gpu_kernels.calculate_slope(self)
+            return
+
+        # CPU implementation (vectorized NumPy)
         # Vectorized data extraction
         pos = np.array([mol.pos for mol in self.mols])  # (ntrajs, nat_qm, ndim)
         rho = np.array([np.diag(mol.rho.real) for mol in self.mols])  # (ntrajs, nst)
@@ -767,6 +789,12 @@ class CTv2(MQC):
     def calculate_center(self):
         """ Routine to calculate center or intercept of quantum momentum
         """
+        # Use GPU-accelerated version if available
+        if self.use_gpu and self._gpu_kernels is not None:
+            self._gpu_kernels.calculate_center(self)
+            return
+
+        # CPU implementation (vectorized NumPy)
         # Vectorized data extraction
         pos = np.array([mol.pos for mol in self.mols])  # (ntrajs, nat_qm, ndim)
 
@@ -1051,6 +1079,8 @@ class CTv2(MQC):
           t_cons                   = {self.t_cons:>16d}
           l_etot0                  = {self.l_etot0:>16}
           l_lap                    = {self.l_lap:>16}
+          use_gpu                  = {self.use_gpu:>16}
+          gpu_device               = {self.gpu.device_name:>16s}
         """)
 
         print (ct_info, flush=True)

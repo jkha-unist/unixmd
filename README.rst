@@ -31,7 +31,62 @@ You can easily install the latest Numpy, Scipy and Cython via Python's pip comma
 ::
 
   $ pip install --upgrade numpy scipy Cython
-    
+
+GPU Acceleration (Optional)
+===========================
+PyUNIxMD supports GPU acceleration for coupled-trajectory methods (CTv2) to speed up
+cross-trajectory calculations. This is particularly beneficial for large trajectory ensembles
+(500+ trajectories).
+
+**Supported Hardware:**
+
+* Apple Silicon (M1/M2/M3/M4) via Metal Performance Shaders (MPS)
+* NVIDIA GPUs via CUDA
+
+**Installation:**
+
+Install PyTorch to enable GPU acceleration:
+
+::
+
+  $ pip install torch
+
+**Usage:**
+
+GPU acceleration is enabled by default when PyTorch is installed. The backend is
+automatically detected based on available hardware.
+
+.. code-block:: python
+
+  import mqc
+
+  # Auto-detect GPU (default)
+  md = mqc.CTv2(molecules=mols, use_gpu='auto', ...)
+
+  # Force GPU mode
+  md = mqc.CTv2(molecules=mols, use_gpu=True, ...)
+
+  # Force CPU mode
+  md = mqc.CTv2(molecules=mols, use_gpu=False, ...)
+
+You can also control the GPU mode via environment variable:
+
+::
+
+  $ export PYUNIXMD_USE_GPU=false   # Force CPU mode
+  $ export PYUNIXMD_USE_GPU=true    # Force GPU mode
+  $ export PYUNIXMD_USE_GPU=auto    # Auto-detect (default)
+
+**Performance:**
+
+Typical speedups on Apple Silicon for CTv2 cross-trajectory calculations:
+
+* 500 trajectories: ~5x speedup
+* 1000 trajectories: ~10x speedup
+* 2000 trajectories: ~15-20x speedup
+
+A benchmark script is provided at ``$PYUNIXMDHOME/tests/benchmark_gpu.py``.
+
 Build
 =====
 You can build PyUNIxMD by the following command.
