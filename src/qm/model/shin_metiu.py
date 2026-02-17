@@ -1,7 +1,7 @@
 from __future__ import division
 from qm.model.model import Model
 import numpy as np
-from math import erf
+from scipy.special import erf
 from misc import eps
 
 class Shin_Metiu(Model):
@@ -62,8 +62,8 @@ class Shin_Metiu(Model):
         x = molecule.pos[0, 0]
 
         # Add the potential contribution (diagonal)
-        xes = [self.xmin + ix * self.dx for ix in range(self.nx)]
-        Vs = [self.get_V(x, xe) for xe in xes]
+        xes = np.linspace(self.xmin, self.xmax, self.nx)
+        Vs = self.get_V(x, xes)
         self.H += np.diag(Vs)
 
         # Diagonalization
@@ -82,53 +82,83 @@ class Shin_Metiu(Model):
             molecule.states[ist].energy = ws[ist]
 
         # Extract adiabatic quantities
-        dVs = [self.get_dV(x, xe) for xe in xes]
+        dVs = self.get_dV(x, xes)
         dVijs = np.dot(np.transpose(unitary), np.dot(np.diag(dVs), unitary))
 
         Fs = - np.diag(dVijs)
         for ist in range(molecule.nst):
             molecule.states[ist].force = Fs[ist]
 
-        for ist in range(molecule.nst):
-            for jst in range(ist + 1, molecule.nst):
-                molecule.nac[ist, jst, 0, 0] = dVijs[ist, jst] / (ws[jst] - ws[ist])
-                molecule.nac[jst, ist, 0, 0] = - molecule.nac[ist, jst, 0, 0]
+        # Vectorized NAC calculation: dVijs / (ws[j] - ws[i])
+        energy_diff = ws[np.newaxis, :] - ws[:, np.newaxis]  # energy_diff[i,j] = ws[j] - ws[i]
+        # Avoid division by zero on diagonal by setting it to 1 (result will be zeroed anyway)
+        energy_diff_safe = np.where(energy_diff != 0, energy_diff, 1.)
+        nac_full = dVijs / energy_diff_safe
+        # Enforce antisymmetry: keep upper triangle and subtract transpose
+        nac_upper = np.triu(nac_full, k=1)
+        molecule.nac[:, :, 0, 0] = nac_upper - nac_upper.T
 
-    def get_V(self, x, xe):
-        """ Calculate potential elements of the BO Hamiltonian
+    def get_V(self, x, xes):
+        """ Calculate potential elements of the BO Hamiltonian (vectorized)
 
             :param double x: the nuclear position
-            :param double xe: the electronic position
+            :param double/ndarray xes: the electronic position(s)
         """
-        RR = np.abs(x - xe)
+        RR = np.abs(x - xes)
 
-        if (RR > eps):
-            V = - erf(RR / self.Rc) / RR
-        else:
-            V = - 2. / (np.sqrt(np.pi) * self.Rc)
+        # Use limit value: lim_{r->0} erf(r/R)/r = 2/(sqrt(pi)*R)
+        RR_safe = np.where(RR > eps, RR, 1.)
+        V = np.where(RR > eps,
+                     -erf(RR / self.Rc) / RR_safe,
+                     -2. / (np.sqrt(np.pi) * self.Rc))
 
-        V += - erf(np.abs(xe - 0.5 * self.L) / self.Rr) / np.abs(xe - 0.5 * self.L) - \
-            erf(np.abs(xe + 0.5 * self.L) / self.Rl) / np.abs(xe + 0.5 * self.L) + \
-            1. / np.abs(x - 0.5 * self.L) + 1. / np.abs(x + 0.5 * self.L)
+        # Fixed nuclei terms with proper limits
+        xes_r = np.abs(xes - 0.5 * self.L)
+        xes_l = np.abs(xes + 0.5 * self.L)
+        xes_r_safe = np.where(xes_r > eps, xes_r, 1.)
+        xes_l_safe = np.where(xes_l > eps, xes_l, 1.)
+
+        # lim_{r->0} erf(r/R)/r = 2/(sqrt(pi)*R)
+        V_r = np.where(xes_r > eps,
+                       -erf(xes_r / self.Rr) / xes_r_safe,
+                       -2. / (np.sqrt(np.pi) * self.Rr))
+        V_l = np.where(xes_l > eps,
+                       -erf(xes_l / self.Rl) / xes_l_safe,
+                       -2. / (np.sqrt(np.pi) * self.Rl))
+
+        # Nuclear repulsion terms (1/r diverges, use safe denominator)
+        x_r = np.abs(x - 0.5 * self.L)
+        x_l = np.abs(x + 0.5 * self.L)
+        x_r_safe = np.where(x_r > eps, x_r, eps)
+        x_l_safe = np.where(x_l > eps, x_l, eps)
+
+        V += V_r + V_l + 1. / x_r_safe + 1. / x_l_safe
 
         return V
 
-    def get_dV(self, x, xe):
-        """ Calculate del potential elements of the BO Hamiltonian
+    def get_dV(self, x, xes):
+        """ Calculate del potential elements of the BO Hamiltonian (vectorized)
 
             :param double x: the nuclear position
-            :param double xe: the electronic position
+            :param double/ndarray xes: the electronic position(s)
         """
-        RR = np.abs(x - xe)
- 
-        if (RR > eps):
-            dV = (x - xe) * erf(RR / self.Rc) / RR ** 3 - \
-                2. * (x - xe) * np.exp(- RR ** 2 / self.Rc ** 2) / np.sqrt(np.pi) / self.Rc / RR ** 2
-        else:
-            dV = 0.
+        RR = np.abs(x - xes)
 
-        dV -= (np.abs(x - 0.5 * self.L) ** (- 3)) * (x - 0.5 * self.L) + \
-            (np.abs(x + 0.5 * self.L) ** (- 3)) * (x + 0.5 * self.L)
+        # Use safe denominator to avoid division by zero warnings
+        RR_safe = np.where(RR > eps, RR, 1.)
+        dV = np.where(RR > eps,
+                      (x - xes) * erf(RR / self.Rc) / RR_safe ** 3
+                      - 2. * (x - xes) * np.exp(-RR ** 2 / self.Rc ** 2) / np.sqrt(np.pi) / self.Rc / RR_safe ** 2,
+                      0.)
+
+        # Safe denominators for fixed nuclei terms
+        x_r = np.abs(x - 0.5 * self.L)
+        x_l = np.abs(x + 0.5 * self.L)
+        x_r_safe = np.where(x_r > eps, x_r, eps)
+        x_l_safe = np.where(x_l > eps, x_l, eps)
+
+        dV -= ((x - 0.5 * self.L) / x_r_safe ** 3
+               + (x + 0.5 * self.L) / x_l_safe ** 3)
 
         return dV
 

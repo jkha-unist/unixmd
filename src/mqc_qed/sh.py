@@ -1,7 +1,7 @@
 from __future__ import division
 from lib.libmqc_qed import el_run
 from mqc_qed.mqc import MQC_QED
-from misc import eps, au_to_K, call_name, typewriter
+from misc import eps, au_to_K, call_name, typewriter, close_files
 import random, os, shutil, textwrap
 import numpy as np
 import pickle
@@ -239,6 +239,9 @@ class SH(MQC_QED):
             with open(restart_file, 'wb') as f:
                 pickle.dump({'qed':qed, 'qm':qm, 'md':self}, f)
 
+        # Close open file handles for this directory
+        close_files(unixmd_dir)
+
         # Delete scratch directory
         if (not l_save_scr):
             tmp_dir = os.path.join(unixmd_dir, "scr_qed")
@@ -262,42 +265,35 @@ class SH(MQC_QED):
         # Reset surface hopping variables
         self.rstate_old = self.rstate
 
-        self.prob = np.zeros(self.pol.pst)
-        self.acc_prob = np.zeros(self.pol.pst + 1)
+        self.prob.fill(0.)
+        self.acc_prob.fill(0.)
 
         self.l_hop = False
 
-        accum = 0.
+        rstate = self.rstate
+        rho_a_rstate = self.pol.rho_a.real[rstate, rstate]
 
         # tmp_ham = U^+ * H * U
-        tmp_ham = np.zeros((self.pol.pst, self.pol.pst)) 
         tmp_ham = np.matmul(np.transpose(qed.unitary), np.matmul(qed.ham_d, qed.unitary))
         # self.pol.pnacme = U^+ * K * U + U^+ * U_dot
         # H and K are Hamiltonian and NACME in uncoupled basis
 
         if (not qed.l_trivial):
-            for ist in range(self.pol.pst):
-                if (ist != self.rstate):
-                    self.prob[ist] = - 2. * (self.pol.rho_a.imag[self.rstate, ist] * tmp_ham[self.rstate, ist] \
-                        - self.pol.rho_a.real[self.rstate, ist] * self.pol.pnacme[self.rstate, ist]) \
-                        * self.dt / self.pol.rho_a.real[self.rstate, self.rstate]
+            # Vectorized probability calculation
+            self.prob = -2. * (self.pol.rho_a.imag[rstate, :] * tmp_ham[rstate, :] \
+                - self.pol.rho_a.real[rstate, :] * self.pol.pnacme[rstate, :]) \
+                * self.dt / rho_a_rstate
 
-                    if (self.prob[ist] < 0.):
-                        self.prob[ist] = 0.
-                    accum += self.prob[ist]
-                self.acc_prob[ist + 1] = accum
-            psum = self.acc_prob[self.pol.pst]
+            self.prob[rstate] = 0.  # Zero out self-transition
+            self.prob = np.maximum(self.prob, 0.)  # Clip negative values
         else:
-            for ist in range(self.pol.pst):
-                if (ist != self.rstate):
-                    if (ist == qed.trivial_state):
-                        self.prob[ist] = 1.
-                    else:
-                        self.prob[ist] = 0.
+            # Trivial crossing: set probability to 1 for trivial_state
+            self.prob[qed.trivial_state] = 1.
+            self.prob[rstate] = 0.  # Zero out self-transition (in case trivial_state == rstate)
 
-                    accum += self.prob[ist]
-                self.acc_prob[ist + 1] = accum
-            psum = self.acc_prob[self.pol.pst]
+        # Cumulative sum for accumulated probabilities
+        self.acc_prob[1:] = np.cumsum(self.prob)
+        psum = self.acc_prob[self.pol.pst]
 
         if (psum > 1.):
             self.prob /= psum
@@ -440,20 +436,20 @@ class SH(MQC_QED):
         rho_update = 1.
 
         if (self.elec_object == "coefficient"):
-            # Update coefficients
-            for ist in range(self.pol.pst):
-                # self.pol.pol_states[self.rstate] need other updated coefficients
-                if (ist != self.rstate):
-                    self.pol.pol_states[ist].coef_a *= exp_tau[ist]
-                    rho_update -= self.pol.pol_states[ist].coef_a.conjugate() * self.pol.pol_states[ist].coef_a
+            # Update coefficients (vectorized)
+            coefs = np.array([st.coef_a for st in self.pol.pol_states])
+            mask = np.arange(self.pol.pst) != self.rstate
+            coefs[mask] *= exp_tau[mask]
+            rho_update -= np.sum(np.abs(coefs[mask]) ** 2)
 
-            self.pol.pol_states[self.rstate].coef_a *= np.sqrt(rho_update / self.pol.rho_a[self.rstate, self.rstate])
+            coefs[self.rstate] *= np.sqrt(rho_update / self.pol.rho_a[self.rstate, self.rstate])
 
-            # Get density matrix elements from coefficients
+            # Write back coefficients
             for ist in range(self.pol.pst):
-                for jst in range(ist, self.pol.pst):
-                    self.pol.rho_a[ist, jst] = self.pol.pol_states[ist].coef_a.conjugate() * self.pol.pol_states[jst].coef_a
-                    self.pol.rho_a[jst, ist] = self.pol.rho_a[ist, jst].conjugate()
+                self.pol.pol_states[ist].coef_a = coefs[ist]
+
+            # Get density matrix elements from coefficients (vectorized outer product)
+            self.pol.rho_a = np.outer(coefs.conj(), coefs)
 
 #        elif (self.elec_object == "density"):
 #            # save old running state element for update running state involved elements

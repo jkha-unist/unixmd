@@ -1,7 +1,7 @@
 from __future__ import division
 from lib.libmqc import el_run
 from mqc_qed.mqc import MQC_QED
-from misc import au_to_K, call_name, typewriter
+from misc import au_to_K, call_name, typewriter, close_files
 import os, shutil, textwrap
 import numpy as np
 import pickle
@@ -126,6 +126,9 @@ class Eh(MQC_QED):
             with open(restart_file, 'wb') as f:
                 pickle.dump({'qm':qm, 'md':self}, f)
 
+        # Close open file handles for this directory
+        close_files(unixmd_dir)
+
         # Delete scratch directory
         if (not l_save_scr):
             tmp_dir = os.path.join(unixmd_dir, "scr_qm")
@@ -140,24 +143,40 @@ class Eh(MQC_QED):
     def calculate_force(self):
         """ Calculate the Ehrenfest force
         """
-        self.rforce = np.zeros((self.mol.nat, self.mol.ndim))
+        # Adiabatic force contribution (vectorized)
+        forces = np.array([st.force for st in self.mol.states])
+        rho_diag = np.diag(self.mol.rho.real)
 
-        for ist, istate in enumerate(self.mol.states):
-            self.rforce += istate.force * self.mol.rho.real[ist, ist]
+        # Handle different force shapes (1D model vs molecular system)
+        if forces.ndim == 1:
+            # 1D model: forces shape is (nst,)
+            self.rforce = np.sum(rho_diag * forces)
+        else:
+            # Molecular system: forces shape is (nst, nat, ndim)
+            self.rforce = np.einsum('i,i...->...', rho_diag, forces)
 
-        for ist in range(self.mol.nst):
-            for jst in range(ist + 1, self.mol.nst):
-                self.rforce += 2. * self.mol.nac[ist, jst] * self.mol.rho.real[ist, jst] \
-                    * (self.mol.states[ist].energy - self.mol.states[jst].energy)
+        # Non-adiabatic force contribution (vectorized)
+        energies = np.array([st.energy for st in self.mol.states])
+        triu_idx = np.triu_indices(self.mol.nst, k=1)
+        energy_diff = energies[triu_idx[0]] - energies[triu_idx[1]]
+        rho_ij = self.mol.rho.real[triu_idx]
+        nac_triu = self.mol.nac[triu_idx]
+
+        # Handle different NAC shapes
+        if nac_triu.ndim == 1:
+            # 1D model
+            self.rforce += np.sum(energy_diff * rho_ij * 2. * nac_triu)
+        else:
+            self.rforce += np.einsum('k,k,k...->...', energy_diff, rho_ij, 2. * nac_triu)
 
     def update_energy(self):
         """ Routine to update the energy of molecules in Ehrenfest dynamics
         """
         # Update kinetic energy
         self.mol.update_kinetic()
-        self.mol.epot = 0.
-        for ist, istate in enumerate(self.mol.states):
-            self.mol.epot += self.mol.rho.real[ist, ist] * self.mol.states[ist].energy
+        # Potential energy (vectorized)
+        energies = np.array([st.energy for st in self.mol.states])
+        self.mol.epot = np.sum(np.diag(self.mol.rho.real) * energies)
         self.mol.etot = self.mol.epot + self.mol.ekin
 
     def write_md_output(self, unixmd_dir, istep):

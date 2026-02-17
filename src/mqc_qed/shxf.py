@@ -1,7 +1,7 @@
 from __future__ import division
 from lib.libmqcxf_qed import el_run
 from mqc_qed.mqc import MQC_QED
-from misc import eps, au_to_K, au_to_A, call_name, typewriter
+from misc import eps, au_to_K, au_to_A, call_name, typewriter, close_files
 import random, os, shutil, textwrap
 import numpy as np
 import pickle
@@ -295,6 +295,9 @@ class SHXF(MQC_QED):
             with open(restart_file, 'wb') as f:
                 pickle.dump({'qed':qed, 'qm':qm, 'md':self}, f)
 
+        # Close open file handles for this directory
+        close_files(unixmd_dir)
+
         # Delete scratch directory
         if (not l_save_scr):
             tmp_dir = os.path.join(unixmd_dir, "scr_qed")
@@ -318,49 +321,42 @@ class SHXF(MQC_QED):
         # Reset surface hopping variables
         self.rstate_old = self.rstate
 
-        self.prob = np.zeros(self.pol.pst)
-        self.acc_prob = np.zeros(self.pol.pst + 1)
+        self.prob.fill(0.)
+        self.acc_prob.fill(0.)
 
         self.l_hop = False
         self.force_hop = False
 
-        accum = 0.
+        rstate = self.rstate
+        rho_a_rstate = self.pol.rho_a.real[rstate, rstate]
 
-        if (self.pol.rho_a.real[self.rstate, self.rstate] < self.lower_th):
+        if (rho_a_rstate < self.lower_th):
             self.force_hop = True
 
         # tmp_ham = U^+ * H * U
-        tmp_ham = np.zeros((self.pol.pst, self.pol.pst)) 
         tmp_ham = np.matmul(np.transpose(qed.unitary), np.matmul(qed.ham_d, qed.unitary))
         # self.pol.pnacme = U^+ * K * U + U^+ * U_dot
         # H and K are Hamiltonian and NACME in uncoupled basis
 
         if (not qed.l_trivial):
-            for ist in range(self.pol.pst):
-                if (ist != self.rstate):
-                    if (self.force_hop):
-                        self.prob[ist] = self.pol.rho_a.real[ist, ist] / self.upper_th
-                    else:
-                        self.prob[ist] = - 2. * (self.pol.rho_a.imag[self.rstate, ist] * tmp_ham[self.rstate, ist] \
-                            - self.pol.rho_a.real[self.rstate, ist] * self.pol.pnacme[self.rstate, ist]) \
-                            * self.dt / self.pol.rho_a.real[self.rstate, self.rstate]
+            # Vectorized probability calculation
+            if (self.force_hop):
+                self.prob = self.pol.rho_a.real.diagonal().copy() / self.upper_th
+            else:
+                self.prob = -2. * (self.pol.rho_a.imag[rstate, :] * tmp_ham[rstate, :] \
+                    - self.pol.rho_a.real[rstate, :] * self.pol.pnacme[rstate, :]) \
+                    * self.dt / rho_a_rstate
 
-                    if (self.prob[ist] < 0.):
-                        self.prob[ist] = 0.
-                    accum += self.prob[ist]
-                self.acc_prob[ist + 1] = accum
-            psum = self.acc_prob[self.pol.pst]
+            self.prob[rstate] = 0.  # Zero out self-transition
+            self.prob = np.maximum(self.prob, 0.)  # Clip negative values
         else:
-            for ist in range(self.pol.pst):
-                if (ist != self.rstate):
-                    if (ist == qed.trivial_state):
-                        self.prob[ist] = 1.
-                    else:
-                        self.prob[ist] = 0.
+            # Trivial crossing: set probability to 1 for trivial_state
+            self.prob[qed.trivial_state] = 1.
+            self.prob[rstate] = 0.  # Zero out self-transition (in case trivial_state == rstate)
 
-                    accum += self.prob[ist]
-                self.acc_prob[ist + 1] = accum
-            psum = self.acc_prob[self.pol.pst]
+        # Cumulative sum for accumulated probabilities
+        self.acc_prob[1:] = np.cumsum(self.prob)
+        psum = self.acc_prob[self.pol.pst]
 
         if (psum > 1.):
             self.prob /= psum
@@ -567,11 +563,12 @@ class SHXF(MQC_QED):
         self.event["DECO"].append(f"Destroy auxiliary trajectories: decohered to {one_st} state")
 
         if (self.elec_object == "coefficient"):
+            # Vectorized coefficient reset
+            coefs = np.array([st.coef_a for st in self.pol.pol_states])
+            coefs_new = np.where(np.arange(self.pol.pst) == one_st,
+                                  coefs / np.abs(coefs).real, 0. + 0.j)
             for ist in range(self.pol.pst):
-                if (ist == one_st):
-                    self.pol.pol_states[ist].coef_a /= np.absolute(self.pol.pol_states[ist].coef_a).real
-                else:
-                    self.pol.pol_states[ist].coef_a = 0. + 0.j
+                self.pol.pol_states[ist].coef_a = coefs_new[ist]
 
     def aux_propagator(self):
         """ Routine to propagate auxiliary molecule
@@ -628,11 +625,12 @@ class SHXF(MQC_QED):
         fac = 1. - self.pol.rho_a.real[cstate, cstate]
 
         if (self.elec_object == "coefficient"):
+            # Vectorized coefficient collapse
+            coefs = np.array([st.coef_a for st in self.pol.pol_states])
+            coefs_new = np.where(np.arange(self.pol.pst) == cstate,
+                                  0. + 0.j, coefs / np.sqrt(fac))
             for ist in range(self.pol.pst):
-                if (ist == cstate):
-                    self.pol.pol_states[ist].coef_a = 0. + 0.j
-                else:
-                    self.pol.pol_states[ist].coef_a /= np.sqrt(fac)
+                self.pol.pol_states[ist].coef_a = coefs_new[ist]
 
         self.pol.rho_a[cstate,:] = 0. + 0.j
         self.pol.rho_a[:,cstate] = 0. + 0.j
@@ -641,14 +639,16 @@ class SHXF(MQC_QED):
     def get_phase(self):
         """ Routine to calculate phase term
         """
-        for ist in range(self.pol.pst):
-            if (self.l_coh[ist]):
-                if (self.l_first[ist]):
-                    self.phase[ist] = 0.
-                else:
-                    for iat in range(self.aux.nat):
-                        self.phase[ist, iat] += self.aux.mass[iat] * \
-                            (self.aux.vel[ist, iat] - self.aux.vel_old[ist, iat])
+        # Vectorized phase calculation
+        l_coh = np.array(self.l_coh)  # (pst,)
+        l_first = np.array(self.l_first)  # (pst,)
+        # mass: (nat,), vel: (pst, nat, ndim), vel_old: (pst, nat, ndim)
+        vel_diff = self.aux.vel - self.aux.vel_old  # (pst, nat, ndim)
+        phase_update = self.aux.mass[np.newaxis, :, np.newaxis] * vel_diff  # (pst, nat, ndim)
+        # Apply conditions: l_coh and not l_first
+        update_mask = l_coh[:, np.newaxis, np.newaxis] & ~l_first[:, np.newaxis, np.newaxis]
+        self.phase = np.where(l_first[:, np.newaxis, np.newaxis], 0., self.phase)
+        self.phase += np.where(update_mask, phase_update, 0.)
 
     def append_sigma(self):
         """ Routine to append sigma values when single float number is provided
@@ -771,9 +771,7 @@ class SHXF(MQC_QED):
             :param integer istep: Current MD step
         """
         ctemp = self.pol.ekin * 2. / float(self.pol.ndof) * au_to_K
-        norm = 0.
-        for ist in range(self.pol.pst):
-            norm += self.pol.rho_a.real[ist, ist]
+        norm = np.sum(np.diag(self.pol.rho_a.real))
 
         # Print INFO for each step
         INFO = f" INFO{istep + 1:>9d}{self.rstate:>5d}"

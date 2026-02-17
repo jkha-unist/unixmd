@@ -1,7 +1,7 @@
 from __future__ import division
 from lib.libmqc import el_run
 from mqc.mqc import MQC
-from misc import eps, au_to_K, call_name, typewriter
+from misc import eps, au_to_K, call_name, typewriter, close_files
 import random, os, shutil, textwrap
 import numpy as np
 import pickle
@@ -215,6 +215,9 @@ class SH(MQC):
             with open(restart_file, 'wb') as f:
                 pickle.dump({'qm':qm, 'md':self}, f)
 
+        # Close open file handles for this directory
+        close_files(unixmd_dir)
+
         # Delete scratch directory
         if (not l_save_scr):
             tmp_dir = os.path.join(unixmd_dir, "scr_qm")
@@ -232,22 +235,21 @@ class SH(MQC):
         # Reset surface hopping variables
         self.rstate_old = self.rstate
 
-        self.prob = np.zeros(self.mol.nst)
-        self.acc_prob = np.zeros(self.mol.nst + 1)
+        self.prob.fill(0.)
+        self.acc_prob.fill(0.)
 
         self.l_hop = False
 
-        accum = 0.
+        rstate = self.rstate
+        rho_rstate = self.mol.rho.real[rstate, rstate]
 
-        for ist in range(self.mol.nst):
-            if (ist != self.rstate):
-                self.prob[ist] = - 2. * self.mol.rho.real[ist, self.rstate] * \
-                    self.mol.nacme[ist, self.rstate] * self.dt / self.mol.rho.real[self.rstate, self.rstate]
+        # Vectorized probability calculation
+        self.prob = -2. * self.mol.rho.real[:, rstate] * self.mol.nacme[:, rstate] * self.dt / rho_rstate
+        self.prob[rstate] = 0.  # Zero out self-transition
+        self.prob = np.maximum(self.prob, 0.)  # Clip negative values
 
-                if (self.prob[ist] < 0.):
-                    self.prob[ist] = 0.
-                accum += self.prob[ist]
-            self.acc_prob[ist + 1] = accum
+        # Cumulative sum for accumulated probabilities
+        self.acc_prob[1:] = np.cumsum(self.prob)
         psum = self.acc_prob[self.mol.nst]
 
         if (psum > 1.):
@@ -281,20 +283,22 @@ class SH(MQC):
             a = 1.
             b = 1.
             det = 1.
+            nac = self.mol.nac[self.rstate_old, self.rstate]
+            vel = self.mol.vel[0:self.mol.nat_qm]
+            mass = self.mol.mass[0:self.mol.nat_qm]
             if (self.hop_rescale == "velocity"):
-                a = np.sum(self.mol.mass[0:self.mol.nat_qm] * np.sum(self.mol.nac[self.rstate_old, self.rstate] ** 2., axis=1))
-                b = 2. * np.sum(self.mol.mass[0:self.mol.nat_qm] * np.sum(self.mol.nac[self.rstate_old, self.rstate] \
-                    * self.mol.vel[0:self.mol.nat_qm], axis=1))
+                a = np.einsum('i,ij->', mass, nac ** 2)
+                b = 2. * np.einsum('i,ij,ij->', mass, nac, vel)
                 c = 2. * pot_diff
                 det = b ** 2. - 4. * a * c
             elif (self.hop_rescale == "momentum"):
-                a = np.sum(1. / self.mol.mass[0:self.mol.nat_qm] * np.sum(self.mol.nac[self.rstate_old, self.rstate] ** 2., axis=1))
-                b = 2. * np.sum(np.sum(self.mol.nac[self.rstate_old, self.rstate] * self.mol.vel[0:self.mol.nat_qm], axis=1))
+                a = np.einsum('i,ij->', 1. / mass, nac ** 2)
+                b = 2. * np.einsum('ij,ij->', nac, vel)
                 c = 2. * pot_diff
                 det = b ** 2. - 4. * a * c
             elif (self.hop_rescale == "augment"):
-                a = np.sum(1. / self.mol.mass[0:self.mol.nat_qm] * np.sum(self.mol.nac[self.rstate_old, self.rstate] ** 2., axis=1))
-                b = 2. * np.sum(np.sum(self.mol.nac[self.rstate_old, self.rstate] * self.mol.vel[0:self.mol.nat_qm], axis=1))
+                a = np.einsum('i,ij->', 1. / mass, nac ** 2)
+                b = 2. * np.einsum('ij,ij->', nac, vel)
                 c = 2. * pot_diff
                 det = b ** 2. - 4. * a * c
 
@@ -386,39 +390,39 @@ class SH(MQC):
         rho_update = 1.
 
         if (self.elec_object == "coefficient"):
-            # Update coefficients
-            for ist in range(self.mol.nst):
-                # self.mol.states[self.rstate] need other updated coefficients
-                if (ist != self.rstate):
-                    self.mol.states[ist].coef *= exp_tau[ist]
-                    rho_update -= self.mol.states[ist].coef.conjugate() * self.mol.states[ist].coef
+            # Update coefficients (vectorized)
+            coefs = np.array([st.coef for st in self.mol.states])
+            mask = np.arange(self.mol.nst) != self.rstate
+            coefs[mask] *= exp_tau[mask]
+            rho_update -= np.sum(np.abs(coefs[mask]) ** 2)
 
-            self.mol.states[self.rstate].coef *= np.sqrt(rho_update / self.mol.rho[self.rstate, self.rstate])
+            coefs[self.rstate] *= np.sqrt(rho_update / self.mol.rho[self.rstate, self.rstate])
 
-            # Get density matrix elements from coefficients
+            # Write back coefficients
             for ist in range(self.mol.nst):
-                for jst in range(ist, self.mol.nst):
-                    self.mol.rho[ist, jst] = self.mol.states[ist].coef.conjugate() * self.mol.states[jst].coef
-                    self.mol.rho[jst, ist] = self.mol.rho[ist, jst].conjugate()
+                self.mol.states[ist].coef = coefs[ist]
+
+            # Get density matrix elements from coefficients (vectorized outer product)
+            self.mol.rho = np.outer(coefs.conj(), coefs)
 
         elif (self.elec_object == "density"):
             # save old running state element for update running state involved elements
             rho_old_rstate = self.mol.rho[self.rstate, self.rstate]
-            for ist in range(self.mol.nst):
-                for jst in range(ist, self.mol.nst):
-                    # Update density matrix. self.mol.rho[ist, rstate] suffers half-update because exp_tau[rstate] = 1
-                    self.mol.rho[ist, jst] *= exp_tau[ist] * exp_tau[jst]
-                    self.mol.rho[jst, ist] = self.mol.rho[ist, jst].conjugate()
 
-                if (ist != self.rstate):
-                    # Update rho[self.rstate, self.rstate] by subtracting other diagonal elements
-                    rho_update -= self.mol.rho[ist, ist]
+            # Update density matrix with exp_tau outer product (vectorized)
+            exp_tau_matrix = np.outer(exp_tau, exp_tau)
+            self.mol.rho *= exp_tau_matrix
+            # Enforce Hermiticity
+            self.mol.rho = np.triu(self.mol.rho) + np.triu(self.mol.rho, k=1).conj().T
 
-            # Update rho[self.rstate, ist] and rho[ist, self.rstate] by using rho_update and rho_old_rstate
-            # rho[self.rstate, self.rstate] automatically update by double counting
-            for ist in range(self.mol.nst):
-                self.mol.rho[ist, self.rstate] *= np.sqrt(rho_update / rho_old_rstate)
-                self.mol.rho[self.rstate, ist] *= np.sqrt(rho_update / rho_old_rstate)
+            # Update rho_update by subtracting other diagonal elements (vectorized)
+            mask = np.arange(self.mol.nst) != self.rstate
+            rho_update -= np.sum(np.diag(self.mol.rho)[mask])
+
+            # Update rho[self.rstate, ist] and rho[ist, self.rstate] (vectorized)
+            scale = np.sqrt(rho_update / rho_old_rstate)
+            self.mol.rho[:, self.rstate] *= scale
+            self.mol.rho[self.rstate, :] *= scale
 
     def calculate_force(self):
         """ Routine to calculate the forces
