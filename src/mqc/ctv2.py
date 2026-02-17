@@ -38,7 +38,7 @@ class CTv2(MQC):
         :param double x_fin: Define asymptotic region (a.u.)
         :param boolean l_real_pop: Use |C_j|^2 for |chi_j|^2/|chi|^2 in quantum momentum calculation.
         :param integer t_pc: Phase correction scheme (1: use P, 2: use sum_j nabla S_j)
-        :param use_gpu: GPU acceleration mode. 'auto' (detect GPU), True (force GPU), False (force CPU)
+        :param use_gpu: GPU acceleration mode. False (CPU, default), True (force GPU), 'auto' (detect GPU)
     """
     def __init__(self, molecules, thermostat=None, istates=None, dt=0.5, nsteps=1000, nesteps=20, \
         elec_object="coefficient", propagator="rk4", l_print_dm=True, l_adj_nac=True, rho_threshold=0.01, \
@@ -46,7 +46,7 @@ class CTv2(MQC):
         l_crunch=True, l_dc_w_mom=True, l_traj_gaussian=False, \
         t_cons=2, l_etot0=True, l_lap=False,\
         l_en_cons=False, artifact_expon=0.2, l_asymp=False, x_fin=25.0, \
-        l_real_pop=True, t_pc=1, use_gpu='auto'):
+        l_real_pop=True, t_pc=1, use_gpu=False):
         # Save name of MQC dynamics
         self.md_type = self.__class__.__name__
 

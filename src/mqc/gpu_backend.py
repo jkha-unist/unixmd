@@ -7,7 +7,7 @@ This allows seamless switching between GPU and CPU execution.
 Usage:
     from mqc.gpu_backend import get_backend
 
-    gpu = get_backend(use_gpu='auto')  # Auto-detect GPU
+    gpu = get_backend(use_gpu=False)  # CPU mode (default)
 
     # Move array to GPU
     tensor = gpu.to_device(numpy_array)
@@ -36,12 +36,12 @@ class GPUBackend:
         dtype_complex: Default complex dtype
     """
 
-    def __init__(self, use_gpu='auto'):
+    def __init__(self, use_gpu=False):
         """Initialize GPU backend.
 
         Args:
-            use_gpu: 'auto' (detect GPU), 'true'/'True'/True (force GPU),
-                     'false'/'False'/False (force CPU)
+            use_gpu: False/'false' (CPU, default), True/'true' (force GPU),
+                     'auto' (detect GPU)
         """
         self.backend = 'numpy'
         self.device = None
@@ -290,12 +290,12 @@ class GPUBackend:
 _backend = None
 
 
-def get_backend(use_gpu='auto'):
+def get_backend(use_gpu=False):
     """Get or create the global GPU backend instance.
 
     Args:
-        use_gpu: 'auto' (detect GPU), True/'true' (force GPU),
-                 False/'false' (force CPU)
+        use_gpu: False/'false' (CPU, default), True/'true' (force GPU),
+                 'auto' (detect GPU)
 
     Returns:
         GPUBackend instance

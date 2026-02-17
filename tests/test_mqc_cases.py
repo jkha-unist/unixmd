@@ -80,21 +80,51 @@ ALL_CASES = [
      ],
 ]
 
-def _load_numeric(path: Path, is_xyz: bool):
-    if is_xyz:
+def _load_numeric(path: Path, tg: str):
+    if tg.endswith(".xyz"):
         return np.loadtxt(path, skiprows=2, usecols=(1, 2))
     return np.loadtxt(path, skiprows=1)
 
+def _load_energy_from_movie_xyz(path: Path):
+    """Extract energy data from MOVIE.xyz comment lines.
+
+    Format: step=N Ekin=X Epot=X Etot=X E0=X E1=X ...
+    Returns array of [step, Ekin, Epot, Etot, E0, E1, ...] per frame.
+    """
+    energies = []
+    with open(path, 'r') as f:
+        lines = f.readlines()
+
+    nat = int(lines[0].strip())
+    frame_lines = nat + 2  # nat + natom line + comment line
+
+    for i in range(0, len(lines), frame_lines):
+        comment_line = lines[i + 1].strip()
+        # Parse key=value pairs
+        row = []
+        for token in comment_line.split():
+            if '=' in token:
+                _, value = token.split('=', 1)
+                row.append(float(value))
+        energies.append(row)
+
+    return np.array(energies)
+
 def _compare_file(out_file: Path, ref_file: Path, tg: str):
 
-    is_xyz = tg.endswith(".xyz")
-    out_data = _load_numeric(out_file, is_xyz)
-    ref_data = _load_numeric(ref_file, is_xyz)
+    if tg == "MOVIE.xyz":
+        # Compare energy data extracted from MOVIE.xyz comment lines
+        out_data = _load_energy_from_movie_xyz(out_file)
+        ref_data = _load_energy_from_movie_xyz(ref_file)
+    else:
+        out_data = _load_numeric(out_file, tg)
+        ref_data = _load_numeric(ref_file, tg)
 
     assert out_data.shape == ref_data.shape, f"Shape mismatch: {tg}"
 
     # Compare absolute values for phase-dependent quantities (eigenvector phase convention)
-    if tg in ["NACME", "BOCOH"]:
+    if tg in ["NACME", "DENSITY"]:
+        # For DENSITY, coherences can have phase-dependent signs
         out_data = np.abs(out_data)
         ref_data = np.abs(ref_data)
 
@@ -106,10 +136,12 @@ def test_mqc_case(args, case_id):
     run_case(args)
     #return
     # Determine what to compare
-    targets = ["MDENERGY", "FINAL.xyz"]
+    # Energy data now in MOVIE.xyz comment line (replaces MDENERGY)
+    targets = ["MOVIE.xyz", "FINAL.xyz"]
 
     if args.md != 0:    # not BOMD
-        targets += ["BOPOP", "NACME"]
+        # DENSITY replaces BOPOP + BOCOH
+        targets += ["DENSITY", "NACME"]
 
     if args.md in (2, 3, 4, 7):   # have the SH feature (SH, SHXF, EhXF, SHXFv2)
         targets += ["SHSTATE", "SHPROB"]

@@ -53,29 +53,29 @@ Install PyTorch to enable GPU acceleration:
 
 **Usage:**
 
-GPU acceleration is enabled by default when PyTorch is installed. The backend is
-automatically detected based on available hardware.
+GPU acceleration is disabled by default. To enable it, set ``use_gpu=True`` or
+``use_gpu='auto'`` when creating the dynamics object.
 
 .. code-block:: python
 
   import mqc
 
-  # Auto-detect GPU (default)
-  md = mqc.CTv2(molecules=mols, use_gpu='auto', ...)
+  # CPU mode (default)
+  md = mqc.CTv2(molecules=mols, ...)
 
   # Force GPU mode
   md = mqc.CTv2(molecules=mols, use_gpu=True, ...)
 
-  # Force CPU mode
-  md = mqc.CTv2(molecules=mols, use_gpu=False, ...)
+  # Auto-detect GPU
+  md = mqc.CTv2(molecules=mols, use_gpu='auto', ...)
 
 You can also control the GPU mode via environment variable:
 
 ::
 
-  $ export PYUNIXMD_USE_GPU=false   # Force CPU mode
+  $ export PYUNIXMD_USE_GPU=false   # Force CPU mode (default)
   $ export PYUNIXMD_USE_GPU=true    # Force GPU mode
-  $ export PYUNIXMD_USE_GPU=auto    # Auto-detect (default)
+  $ export PYUNIXMD_USE_GPU=auto    # Auto-detect
 
 **Performance:**
 
