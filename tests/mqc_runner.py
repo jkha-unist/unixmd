@@ -15,6 +15,7 @@ class MQCArgs:
     rescale: int = 3 # the hop rescale option (0: energy, 1: velocity, 2: momentum, 3: augment)
     reject: int = 1  # the hop reject option (0: keep, 1: reverse)
     width: int = 0   # the width scheme in XF (0: frozen Gaussian as 0.1 Bohr, 1: TD)
+    use_gpu: bool = 'auto'  # use GPU acceleration for CTv2
 
 MOMENTUM_JUMP_SCHEME = {
     (0, 0): ("-e+", "energy",   "keep"),
@@ -91,7 +92,8 @@ X1       -2.0     0.02
         out_dir += "-CTv2"
         mol1 = copy.deepcopy(mol)
         mol1.pos[0, 0] = -1.9
-        md = mqc.CTv2(molecules=[mol, mol1], nsteps=nsteps, nesteps=1, dt=5.0, unit_dt="au", istates=[1, 1])
+        md = mqc.CTv2(molecules=[mol, mol1], nsteps=nsteps, nesteps=1, dt=5.0, unit_dt="au",
+                      istates=[1, 1], use_gpu=args.use_gpu)
 
     elif args.md == 7:  # SHXFv2
         out_dir += "-SHXFv2"

@@ -146,7 +146,13 @@ class CTv2(MQC):
         self.event = {"DECO": []}
 
         # Initialize GPU backend for cross-trajectory calculations
-        self.gpu = get_backend(use_gpu)
+        # Create a dedicated backend instance when GPU is requested,
+        # to avoid issues with global singleton initialization order
+        if use_gpu:
+            from mqc.gpu_backend import GPUBackend
+            self.gpu = GPUBackend(use_gpu)
+        else:
+            self.gpu = get_backend(use_gpu)
         self.use_gpu = (self.gpu.backend == 'torch')
 
         if self.use_gpu:
@@ -620,11 +626,17 @@ class CTv2(MQC):
         # 1. Calculate variances for each trajectory
         self.calculate_sigma()
 
-        # 2. Calculate slope
-        self.calculate_slope()
-
-        # 3. Calculate the center of quantum momentum
-        self.calculate_center()
+        # 2-3. Calculate slope and center (fused on GPU if available)
+        if self.use_gpu and self._gpu_kernels is not None:
+            # Fused GPU implementation with persistent tensors and batched states:
+            # - Keeps g_i_IJ on GPU, avoiding round-trip transfer
+            # - Uses persistent GPU tensors to avoid repeated allocation
+            # - Computes g_i_IJ for all states in single batched operation
+            self._gpu_kernels.calculate_slope_and_center(self)
+        else:
+            # CPU implementation: separate slope and center calculations
+            self.calculate_slope()
+            self.calculate_center()
 
         # 4. Compute quantum momentum (vectorized)
         # G_{\nu, ij} = (\nabla_\nu|\chi_i|^2 / |\chi_i|^2  + \nabla_\nu|\chi_j|^2/|\chi_j|^2)
