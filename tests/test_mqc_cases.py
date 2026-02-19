@@ -78,6 +78,11 @@ ALL_CASES = [
         )
         for r in range(4) for j in range(2)
      ],
+
+    # CTv2_GPU
+    pytest.param(
+        MQCArgs(md=8), "TEST-CTv2_GPU", marks=(pytest.mark.mqc, pytest.mark.ctv2_gpu)
+    ),
 ]
 
 def _load_numeric(path: Path, tg: str):
@@ -149,9 +154,9 @@ def test_mqc_case(args, case_id):
     # Compare test results and the reference
     case_id = Path(case_id)
     for tg in targets:
-        if args.md not in (5, 6):    # not CT or CTv2
+        if args.md not in (5, 6, 8):    # not CT or CTv2 or CTv2_GPU
             _compare_file(case_id / "md" / tg, REF_ROOT / case_id / "md" / tg, tg)
-        else:    # CT or CTv2
+        else:    # CT or CTv2 or CTv2_GPU
             _compare_file(case_id / "TRAJ_1" / "md" / tg, REF_ROOT / case_id / "TRAJ_1" / "md" / tg, tg)
             _compare_file(case_id / "TRAJ_2" / "md" / tg, REF_ROOT / case_id / "TRAJ_2" / "md" / tg, tg)
 

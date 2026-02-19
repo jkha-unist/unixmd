@@ -104,6 +104,8 @@ The corresponding examples are:
 
 * $PYUNIXMDHOME/examples/qm/SHXF-Shin_Metiu
 
+* $PYUNIXMDHOME/examples/qm/CTv2-DAG
+
 $PYUNIXMDHOME is the top-level directory where this file belongs.
 
 In each directory, you can find the running script named run.py.
