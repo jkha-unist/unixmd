@@ -46,7 +46,7 @@ class DAC(Model):
         dH = np.zeros((2, 2))
         unitary = np.zeros((2, 2))
 
-        x = molecule.pos[0]
+        x = molecule.pos[0, 0]
 
         # Define Hamiltonian
         H[0, 0] = 0.

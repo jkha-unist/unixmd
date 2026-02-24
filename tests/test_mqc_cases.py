@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 from mqc_runner import MQCArgs, run_case
 
-# Usage: 
+# Usage:
 # Run pytest --markers to see registered markers
 # e.g. Test all mqc runs in the Shin-Metiu model: pytest -m mqc -v
 # e.g. Test SHXF runs in the Shin-Metiu model: pytest -m shxf -v
@@ -20,25 +20,30 @@ KEY_RESCALE = ["e", "v", "p", "a"]
 KEY_REJECT = ["+", "-"]
 KEY_WIDTH = ["FG", "TD"]
 
+# Mapping from output directory to reference directory (only when they differ)
+REF_OVERRIDE = {
+    "TEST-CTv2_PAR": "TEST-CTv2",
+}
+
 # Define the test matrix you care about
 ALL_CASES = [
     # BOMD, Eh
     pytest.param(
-        MQCArgs(md=0), "TEST-BOMD", 
+        MQCArgs(md=0), "TEST-BOMD",
         marks=(pytest.mark.mqc, pytest.mark.bomd)
     ),
-    
+
     pytest.param(
-        MQCArgs(md=1), "TEST-Eh", 
+        MQCArgs(md=1), "TEST-Eh",
         marks=(pytest.mark.mqc, pytest.mark.eh)
     ),
 
     # SH
-    *[ 
+    *[
         pytest.param(
-            MQCArgs(md=2, rescale=r, reject=j), f"TEST-SH-{KEY_RESCALE[r]}{KEY_REJECT[j]}", 
+            MQCArgs(md=2, rescale=r, reject=j), f"TEST-SH-{KEY_RESCALE[r]}{KEY_REJECT[j]}",
             marks=(pytest.mark.mqc, pytest.mark.sh)
-        ) 
+        )
         for r in range(4) for j in range(2)
      ],
 
@@ -68,6 +73,11 @@ ALL_CASES = [
     # CTv2
     pytest.param(
         MQCArgs(md=6), "TEST-CTv2", marks=(pytest.mark.mqc, pytest.mark.ctv2)
+    ),
+
+    # CTv2 parallel (ncpus=2) - writes to TEST-CTv2_PAR, compares against TEST-CTv2 reference
+    pytest.param(
+        MQCArgs(md=6, ncpus=2), "TEST-CTv2_PAR", marks=(pytest.mark.mqc, pytest.mark.ctv2)
     ),
 
     # SHXFv2
@@ -152,11 +162,12 @@ def test_mqc_case(args, case_id):
         targets += ["SHSTATE", "SHPROB"]
 
     # Compare test results and the reference
+    # Use REF_OVERRIDE to map output dir to a different reference dir when needed
+    ref_id = Path(REF_OVERRIDE.get(case_id, case_id))
     case_id = Path(case_id)
     for tg in targets:
         if args.md not in (5, 6, 8):    # not CT or CTv2 or CTv2_GPU
-            _compare_file(case_id / "md" / tg, REF_ROOT / case_id / "md" / tg, tg)
+            _compare_file(case_id / "md" / tg, REF_ROOT / ref_id / "md" / tg, tg)
         else:    # CT or CTv2 or CTv2_GPU
-            _compare_file(case_id / "TRAJ_1" / "md" / tg, REF_ROOT / case_id / "TRAJ_1" / "md" / tg, tg)
-            _compare_file(case_id / "TRAJ_2" / "md" / tg, REF_ROOT / case_id / "TRAJ_2" / "md" / tg, tg)
-
+            _compare_file(case_id / "TRAJ_1" / "md" / tg, REF_ROOT / ref_id / "TRAJ_1" / "md" / tg, tg)
+            _compare_file(case_id / "TRAJ_2" / "md" / tg, REF_ROOT / ref_id / "TRAJ_2" / "md" / tg, tg)
