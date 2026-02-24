@@ -21,7 +21,11 @@ Contents
    install
    workflow
    quick_start
+   code_structure
    objects/main
    modules/main
+   gpu_acceleration
+   vectorization
+   parallelization
    utility_scripts
    references/main

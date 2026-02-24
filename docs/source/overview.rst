@@ -17,7 +17,18 @@ The features of PyUNIxMD are as follows.
 - Decoherence based on exact factorization
 
   - Surface hopping based on exact factorization (SHXF) method :cite:`Ha2018`
+  - Ehrenfest dynamics based on exact factorization (EhXF) method
+  - Decoherence-induced surface hopping with exact factorization (SHXFv2 / DISH-XF) :cite:`Ha2018,Kim2022`
   - Coupled-trajectory mixed quantum-classical (CTMQC) method :cite:`Agostini2016`
+  - Coupled-trajectory v2 (CTv2) with CRUNCH, state-wise momentum, and population conservation :cite:`Kim2022`
+
+.. Padding
+
+- Performance and scalability
+
+  - GPU acceleration for cross-trajectory calculations (PyTorch with MPS/CUDA support)
+  - CPU parallelization for QM calculations across trajectories (multiprocessing)
+  - Vectorized NumPy operations with einsum for coupled-trajectory dynamics
 
 .. Padding
 
@@ -65,29 +76,7 @@ Please cite the following work when publishing results from PyUNIxMD program:
 
 Program Structure
 ---------------------------
-The overall code structure is displayed in the next figure.
 
-.. image:: diagrams/pyunixmd_structure.png
-   :width: 400pt
-
-PyUNIxMD is an object-oriented program consisting of
-several key classes closely connected with each other:
-
-- :class:`Molecule` defines a target system. A molecule object contains information of the electronic states as well as the geometry.
-  To run cQED, :class:`Polariton` must be defined instead of :class:`Molecule`, which deals with the polaritonic states.
-
-- :class:`MQC` has information about molecular dynamics. Each nonadiabatic dynamics method (Ehrenfest, surface hopping, etc.) comprises its subclasses. 
-  To run cQED, :class:`MQC_QED` must be defined instead of :class:`MQC`.
-
-- :class:`QM_calculator` interfaces several QM programs (Molpro, Gaussian 09, DFTB+, etc.) and methodologies to perform electronic structure calculations.
-
-- :class:`MM_calculator` enables QM/MM calculations using external softwares such as Tinker.
-
-- :class:`QED_calculator` deals with strong light-matter interaction using built-in model Hamiltonians (Jaynes-Cummings model).
-
-- :class:`Thermostat` controls temperature of a target system.
-
-PyUNIxMD takes advantage of the inheritance feature to organize functionalities and simplify the codes by sharing the common parameters and methods.
-
-For detailed information of each class, see :ref:`PyUNIxMD Objects <Objects>`. 
+For a detailed description of the code organization, core classes, MQC class hierarchy,
+simulation loop, and build pipeline, see :ref:`Code Structure`.
 

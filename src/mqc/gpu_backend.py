@@ -230,7 +230,7 @@ class GPUBackend:
 
         Args:
             subscripts: Einsum subscript string
-            *operands: Input arrays/tensors
+            operands: Input arrays/tensors
 
         Returns:
             Result tensor or array

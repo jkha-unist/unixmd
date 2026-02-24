@@ -92,7 +92,7 @@ class CTv2(MQC):
         :param double artifact_expon: Exponent for width for nuclear density estimation (used only when l_traj_gaussian = True)
         :param boolean l_asymp: Terminate dynamics when the trajectory reaches asymptotic region (use this option for model systems only)
         :param double x_fin: Define asymptotic region (a.u.)
-        :param boolean l_real_pop: Use |C_j|^2 for |chi_j|^2/|chi|^2 in quantum momentum calculation.
+        :param boolean l_real_pop: Use \|C_j\|^2 for \|chi_j\|^2/\|chi\|^2 in quantum momentum calculation.
         :param integer t_pc: Phase correction scheme (1: use P, 2: use sum_j nabla S_j)
         :param use_gpu: GPU acceleration mode. False (CPU, default), True (force GPU), 'auto' (detect GPU)
         :param integer ncpus: Number of CPUs for parallel QM calculations (1 = serial, default)
