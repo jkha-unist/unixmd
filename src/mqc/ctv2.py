@@ -1058,11 +1058,12 @@ class CTv2(MQC):
                         intercept_val = -(self.avg_R[ist] * inv_sigma_i_sq + self.avg_R[jst] * inv_sigma_j_sq)
                         self.intercept_bo[:, index_lk, :, :] = np.where(valid_sigma[np.newaxis, :, :], intercept_val[np.newaxis, :, :], 0.0)
 
-                    # Calculate center_bo
+                    # Calculate center_bo (safe division to avoid RuntimeWarning)
                     slope_bo_valid = np.abs(self.slope_bo[:, index_lk, :, :]) >= self.small
+                    slope_bo_safe = np.where(slope_bo_valid, self.slope_bo[:, index_lk, :, :], 1.0)
                     self.center_bo[:, index_lk, :, :] = np.where(
                         slope_bo_valid,
-                        self.intercept_bo[:, index_lk, :, :] / self.slope_bo[:, index_lk, :, :],
+                        self.intercept_bo[:, index_lk, :, :] / slope_bo_safe,
                         pos
                     )
                     index_lk += 1
