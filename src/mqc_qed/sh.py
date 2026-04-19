@@ -345,6 +345,10 @@ class SH(MQC_QED):
                     c = 2. * pot_diff
                     det = b ** 2. - 4. * a * c
 
+                # Guard against vanishing pNAC: rescaling divides by 'a' which is ~|pnac|^2
+                l_small_nac = (self.hop_rescale in ("velocity", "momentum", "augment")
+                               and a < eps)
+
                 # Default: hopping is allowed
                 self.l_reject = False
 
@@ -360,6 +364,9 @@ class SH(MQC_QED):
                 # When kinetic energy is enough, velocities are always rescaled in 'augment' case
                 if (self.hop_rescale == "augment" and self.pol.ekin_qm > pot_diff):
                     self.l_reject = False
+                # Coupling is too weak to define a rescaling direction; reject this hop
+                if (l_small_nac):
+                    self.l_reject = True
 
                 if (self.l_reject):
                     # Record event for frustrated hop
@@ -369,9 +376,12 @@ class SH(MQC_QED):
                     if (self.hop_reject == "keep"):
                         self.event["HOP"].append("Reject hopping: no solution to find rescale factor, velocity is not changed")
                     elif (self.hop_reject == "reverse"):
-                        # x = - 1 when 'hop_rescale' is 'energy', otherwise x = - b / a
-                        self.event["HOP"].append("Reject hopping: no solution to find rescale factor, velocity is reversed along coupling direction")
-                        x = - b / a
+                        if (l_small_nac):
+                            self.event["HOP"].append("Reject hopping: pNAC magnitude below threshold, velocity is not changed")
+                        else:
+                            # x = - 1 when 'hop_rescale' is 'energy', otherwise x = - b / a
+                            self.event["HOP"].append("Reject hopping: no solution to find rescale factor, velocity is reversed along coupling direction")
+                            x = - b / a
                     # Recover old running state
                     self.l_hop = False
                     self.rstate = self.rstate_old
@@ -388,7 +398,7 @@ class SH(MQC_QED):
                             x = 0.5 * (- b + np.sqrt(det)) / a
 
                 # Rescale velocities for QM atoms
-                if (not (self.hop_reject == "keep" and self.l_reject)):
+                if (not ((self.hop_reject == "keep" or l_small_nac) and self.l_reject)):
                     if (self.hop_rescale == "energy"):
                         self.pol.vel[0:self.pol.nat_qm] *= x
 
