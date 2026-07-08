@@ -94,6 +94,10 @@ class CTv2(MQC):
         :param double x_fin: Define asymptotic region (a.u.)
         :param boolean l_real_pop: Use \|C_j\|^2 for \|chi_j\|^2/\|chi\|^2 in quantum momentum calculation.
         :param integer t_pc: Phase correction scheme (1: use P, 2: use sum_j nabla S_j)
+        :param boolean l_qpot: Include the quantum potential force in nuclear propagation
+        :param boolean l_qpot_real_pop: Use \|C_j\|^2 weights (geometric Gaussian mixture consistent
+            with the linear quantum momentum) for the quantum potential density instead of the
+            ensemble-averaged arithmetic mixture (used only when l_traj_gaussian = False)
         :param use_gpu: GPU acceleration mode. False (CPU, default), True (force GPU), 'auto' (detect GPU)
         :param integer ncpus: Number of CPUs for parallel QM calculations (1 = serial, default)
     """
@@ -103,7 +107,7 @@ class CTv2(MQC):
         l_crunch=True, l_dc_w_mom=True, l_traj_gaussian=False, \
         t_cons=2, l_etot0=True, l_lap=False,\
         l_en_cons=False, artifact_expon=0.2, l_asymp=False, x_fin=25.0, \
-        l_real_pop=True, t_pc=1, use_gpu=False, ncpus=1):
+        l_real_pop=True, t_pc=1, l_qpot=False, l_qpot_real_pop=False, use_gpu=False, ncpus=1):
         # Save name of MQC dynamics
         self.md_type = self.__class__.__name__
 
@@ -173,6 +177,10 @@ class CTv2(MQC):
         self.avg_R = np.zeros((self.nst, self.nat_qm, self.ndim))
         self.pseudo_pop = np.zeros((self.nst, self.ntrajs))
 
+        # Initialize variables for quantum potential
+        self.qpot = np.zeros((self.ntrajs)) # quantum potential Q at each trajectory position
+        self.qpot_force = np.zeros((self.ntrajs, self.nat_qm, self.ndim)) # F^QP = -\nabla Q
+
         # Determine parameters to calculate decoherenece effect
         self.small = 1.0E-08
 
@@ -194,6 +202,14 @@ class CTv2(MQC):
         self.t_pc = t_pc
         self.t_cons = t_cons
         self.l_etot0 = l_etot0
+        self.l_qpot = l_qpot
+        self.l_qpot_real_pop = l_qpot_real_pop
+
+        # Exception for quantum potential with total energy enforcement
+        if (self.l_qpot and self.l_en_cons):
+            error_message = "Quantum potential force cannot be combined with the total energy enforcement!"
+            error_vars = f"l_qpot = {self.l_qpot}, l_en_cons = {self.l_en_cons}"
+            raise ValueError (f"( {self.md_type}.{call_name()} ) {error_message} ( {error_vars} )")
 
         # Variables for aborting dynamics when all trajectories reach asymptotic region
         self.l_asymp = l_asymp
@@ -221,6 +237,13 @@ class CTv2(MQC):
                 self._gpu_kernels = None
         else:
             self._gpu_kernels = None
+
+        # Exception for quantum potential with GPU backend
+        # (density arrays live on the GPU in that path)
+        if (self.l_qpot and self.use_gpu):
+            error_message = "Quantum potential force is not implemented for the GPU backend!"
+            error_vars = f"l_qpot = {self.l_qpot}, use_gpu = {use_gpu}"
+            raise NotImplementedError (f"( {self.md_type}.{call_name()} ) {error_message} ( {error_vars} )")
 
         # CPU parallelization
         self.ncpus = max(1, int(ncpus))
@@ -1252,6 +1275,8 @@ class CTv2(MQC):
           t_cons                   = {self.t_cons:>16d}
           l_etot0                  = {self.l_etot0:>16}
           l_lap                    = {self.l_lap:>16}
+          l_qpot                   = {self.l_qpot:>16}
+          l_qpot_real_pop          = {self.l_qpot_real_pop:>16}
           use_gpu                  = {self.use_gpu:>16}
           gpu_device               = {self.gpu.device_name:>16s}
           ncpus                    = {self.ncpus:>16d}
