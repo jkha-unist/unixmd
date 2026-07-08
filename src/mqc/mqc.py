@@ -414,26 +414,12 @@ class MQC(object):
             :param string unixmd_dir: Directory where MD output files are written
             :param boolean calc_coupling: Check whether the dynamics includes coupling calculation
         """
-        # Energy information file header
-        tmp = f'{"#":5s}{"Step":9s}{"Kinetic(H)":15s}{"Potential(H)":15s}{"Total(H)":15s}' + \
-            "".join([f'E({ist})(H){"":8s}' for ist in range(self.mol.nst)])
-        typewriter(tmp, unixmd_dir, "MDENERGY", "w")
-
         if (self.md_type != "BOMD"):
-            # BO coefficents, densities file header
-            if (self.elec_object == "density"):
-                tmp = f'{"#":5s} Density Matrix: population Re; see the manual for detail orders'
-                typewriter(tmp, unixmd_dir, "BOPOP", "w")
-                tmp = f'{"#":5s} Density Matrix: coherence Re-Im; see the manual for detail orders'
-                typewriter(tmp, unixmd_dir, "BOCOH", "w")
-            elif (self.elec_object == "coefficient"):
-                tmp = f'{"#":5s} BO State Coefficients: state Re-Im; see the manual for detail orders'
-                typewriter(tmp, unixmd_dir, "BOCOEF", "w")
-                if (self.l_print_dm):
-                    tmp = f'{"#":5s} Density Matrix: population Re; see the manual for detail orders'
-                    typewriter(tmp, unixmd_dir, "BOPOP", "w")
-                    tmp = f'{"#":5s} Density Matrix: coherence Re-Im; see the manual for detail orders'
-                    typewriter(tmp, unixmd_dir, "BOCOH", "w")
+            # Combined DENSITY header (replaces BOPOP + BOCOH)
+            if (self.elec_object == "density") or \
+               (self.elec_object == "coefficient" and self.l_print_dm):
+                tmp = f'{"#":5s} Density Matrix: pop(i) coh_re(i,j) coh_im(i,j); see manual'
+                typewriter(tmp, unixmd_dir, "DENSITY", "w")
 
             # DOTPOPNAC file header
             if (self.verbosity >= 1):
@@ -466,36 +452,27 @@ class MQC(object):
             :param boolean calc_coupling: Check whether the dynamics includes coupling calculation
             :param integer istep: Current MD step
         """
-        # Write MOVIE.xyz file including positions and velocities
-        tmp = f'{self.mol.nat:6d}\n{"":2s}Step:{istep + 1:6d}{"":12s}Position(A){"":34s}Velocity(au)' + \
+        # Write MOVIE.xyz file with energy keywords in comment line
+        energy_comment = f'step={istep + 1} Ekin={self.mol.ekin:.8f} Epot={self.mol.epot:.8f} Etot={self.mol.etot:.8f}'
+        energy_comment += "".join([f' E{ist}={states.energy:.8f}' for ist, states in enumerate(self.mol.states)])
+
+        tmp = f'{self.mol.nat:6d}\n{energy_comment}' + \
             "".join(["\n" + f'{self.mol.symbols[iat]:5s}' + \
             "".join([f'{self.mol.pos[iat, isp] * au_to_A:15.8f}' for isp in range(self.mol.ndim)]) + \
             "".join([f"{self.mol.vel[iat, isp]:15.8f}" for isp in range(self.mol.ndim)]) for iat in range(self.mol.nat)])
         typewriter(tmp, unixmd_dir, "MOVIE.xyz", "a")
 
-        # Write MDENERGY file including several energy information
-        tmp = f'{istep + 1:9d}{self.mol.ekin:15.8f}{self.mol.epot:15.8f}{self.mol.etot:15.8f}' \
-            + "".join([f'{states.energy:15.8f}' for states in self.mol.states])
-        typewriter(tmp, unixmd_dir, "MDENERGY", "a")
-
         if (self.md_type != "BOMD"):
-            # Write BOCOEF, BOPOP, BOCOH files
-            if (self.elec_object == "density"):
-                tmp = f'{istep + 1:9d}' + "".join([f'{self.mol.rho.real[ist, ist]:15.8f}' for ist in range(self.mol.nst)])
-                typewriter(tmp, unixmd_dir, "BOPOP", "a")
-                tmp = f'{istep + 1:9d}' + "".join([f"{self.mol.rho.real[ist, jst]:15.8f}{self.mol.rho.imag[ist, jst]:15.8f}" \
+            # Write combined DENSITY file (replaces BOPOP + BOCOH)
+            if (self.elec_object == "density") or \
+               (self.elec_object == "coefficient" and self.l_print_dm):
+                tmp = f'{istep + 1:9d}'
+                # Populations (diagonal)
+                tmp += "".join([f'{self.mol.rho.real[ist, ist]:15.8f}' for ist in range(self.mol.nst)])
+                # Coherences (off-diagonal, real+imag)
+                tmp += "".join([f"{self.mol.rho.real[ist, jst]:15.8f}{self.mol.rho.imag[ist, jst]:15.8f}" \
                     for ist in range(self.mol.nst) for jst in range(ist + 1, self.mol.nst)])
-                typewriter(tmp, unixmd_dir, "BOCOH", "a")
-            elif (self.elec_object == "coefficient"):
-                tmp = f'{istep + 1:9d}' + "".join([f'{states.coef.real:15.8f}{states.coef.imag:15.8f}' \
-                    for states in self.mol.states])
-                typewriter(tmp, unixmd_dir, "BOCOEF", "a")
-                if (self.l_print_dm):
-                    tmp = f'{istep + 1:9d}' + "".join([f'{self.mol.rho.real[ist, ist]:15.8f}' for ist in range(self.mol.nst)])
-                    typewriter(tmp, unixmd_dir, "BOPOP", "a")
-                    tmp = f'{istep + 1:9d}' + "".join([f"{self.mol.rho.real[ist, jst]:15.8f}{self.mol.rho.imag[ist, jst]:15.8f}" \
-                        for ist in range(self.mol.nst) for jst in range(ist + 1, self.mol.nst)])
-                    typewriter(tmp, unixmd_dir, "BOCOH", "a")
+                typewriter(tmp, unixmd_dir, "DENSITY", "a")
 
         if (calc_coupling):
             # Write NACME file
@@ -518,8 +495,11 @@ class MQC(object):
             :param string unixmd_dir: Directory where MD output files are written
             :param integer istep: Current MD step
         """
-        # Write FINAL.xyz file including positions and velocities
-        tmp = f'{self.mol.nat:6d}\n{"":2s}Step:{istep + 1:6d}{"":12s}Position(A){"":34s}Velocity(au)'
+        # Write FINAL.xyz file with energy keywords in comment line
+        energy_comment = f'step={istep + 1} Ekin={self.mol.ekin:.8f} Epot={self.mol.epot:.8f} Etot={self.mol.etot:.8f}'
+        energy_comment += "".join([f' E{ist}={states.energy:.8f}' for ist, states in enumerate(self.mol.states)])
+
+        tmp = f'{self.mol.nat:6d}\n{energy_comment}'
         for iat in range(self.mol.nat):
             tmp += "\n" + f'{self.mol.symbols[iat]:5s}' + \
                 "".join([f'{self.mol.pos[iat, isp] * au_to_A:15.8f}' for isp in range(self.mol.ndim)]) \

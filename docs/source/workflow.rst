@@ -52,7 +52,7 @@ See :ref:`QM_calculator <Objects QM_calculator>` for the list.
 
 **Line 18** sets a thermostat. THERMO_TYPE is a name of Python class specifying how to control temperature. See :ref:`Thermostat <Objects Thermostat>` for the list.
 
-**Line 20** determines a dynamics method you want to use. MD_TYPE is a name of Python class specifying one of MQC methods (BOMD, Eh, SH, SHXF). See :ref:`MQC <Objects MQC>` for the details.
+**Line 20** determines a dynamics method you want to use. MD_TYPE is a name of Python class specifying one of MQC methods (BOMD, Eh, SH, SHXF, EhXF, SHXFv2, CT, CTv2). See :ref:`MQC <Objects MQC>` for the details.
 
 **Line 22** runs the dynamics calculation.
 
@@ -62,81 +62,58 @@ Finally, you will execute your running script.
 
    $ python3 running_script.py
 
-Running MD calculations with PyUNIxMD, you will obtain output files under the following file tree.
+Running MD calculations with PyUNIxMD, you will obtain output files under the ``md/`` directory.
+``qm_log/`` and ``mm_log/`` have logs of QM and MM calculations, respectively
+(these directories are optional). ``RESTART.bin`` is a binary used to restart a dynamics calculation. See :ref:`MQC <Objects MQC>` for the details.
 
-.. image:: diagrams/pyunixmd_file_tree.png
-   :width: 400pt
-
-The blue and light green boxes represent directories and files, respectively. The purple shades distinguish output files that vary according to the MQC methods.
-
-'md/' collects MD outputs, and 'qm_log/' and 'mm_log/' have logs of QM and MM calculations, respectively
-(The latter two directories are optional). 'RESTART.bin' is a binary used to restart a dynamics calculation. See :ref:`MQC <Objects MQC>` for the details.
-
-.. note:: Since default of **l_print_dm** is *True*, thus PyUNIxMD provides 'BOCOH' and 'BOPOP' regardless of **elec_object**.
-   If **elec_object** is *"coefficient"* and you set **l_print_dm** to *False*, then the outputs 'BOCOH' and 'BOPOP' are not written anymore.
+.. note:: Since default of **l_print_dm** is *True*, PyUNIxMD provides ``DENSITY`` regardless of **elec_object**.
+   If **elec_object** is *"coefficient"* and you set **l_print_dm** to *False*, then ``DENSITY`` is not written.
 
 Details of the MD output files and their formats are the following.
 
-- MDENERGY
-
-This file shows MD energies and energies of adiabatic states.
-
-.. code-block:: bash
-
-   <MD step>   <kinetic energy>   <potential energy>   <total MD energy>   <adiabatic energy 0>   <adiabatic energy 1> ... <adiabatic energy last>
-   <MD step>   <kinetic energy>   <potential energy>   <total MD energy>   <adiabatic energy 0>   <adiabatic energy 1> ... <adiabatic energy last>
-   ...
-
 - MOVIE.xyz
 
-This file contains positions and velocities at each MD step (a trajectory).
-For the ease of visualization, those snapshots are written chronically in the extended XYZ format.
+This file contains positions, velocities, and energy information at each MD step (a trajectory).
+Energy keywords are included in the comment line of each frame in the extended XYZ format.
 
 .. code-block:: bash
 
    <number of atoms>
-   Step:     0
+   step=<N> Ekin=<kinetic energy> Epot=<potential energy> Etot=<total MD energy> E0=<energy of state 0> E1=<energy of state 1> ...
    <symbol> <X> <Y> <Z> <V_X> <V_Y> <V_Z>
    <symbol> <X> <Y> <Z> <V_X> <V_Y> <V_Z>
    ...
    <number of atoms>
-   Step:     1
+   step=<N+1> Ekin=<kinetic energy> Epot=<potential energy> Etot=<total MD energy> E0=<energy of state 0> E1=<energy of state 1> ...
    <symbol> <X> <Y> <Z> <V_X> <V_Y> <V_Z>
    <symbol> <X> <Y> <Z> <V_X> <V_Y> <V_Z>
    ...
 
 - FINAL.xyz
 
-This file contains the final position and velocity of an MD calculation.
+This file contains the final position and velocity of an MD calculation,
+with the same energy keyword format in the comment line as ``MOVIE.xyz``.
 
 .. code-block:: bash
 
    <number of atoms>
-   Step:    <last MD step>
+   step=<last step> Ekin=<kinetic energy> Epot=<potential energy> Etot=<total MD energy> E0=<energy of state 0> ...
    <symbol> <X> <Y> <Z> <V_X> <V_Y> <V_Z>
    <symbol> <X> <Y> <Z> <V_X> <V_Y> <V_Z>
    ...
-   <symbol> <X> <Y> <Z> <V_X> <V_Y> <V_Z>
 
-- BOPOP
+- DENSITY
 
-This file shows the adiabatic populations (diagonal elements of the density matrix) at each MD step.
-
-.. code-block:: bash
-
-   <MD step> <population of state 0> <population of state 1> ... <population of last state> 
-   <MD step> <population of state 0> <population of state 1> ... <population of last state> 
-   ... 
-
-- BOCOH 
-
-This file shows off-diagonal elements of the density matrix at each MD step. Only the upper triangular portions are given because of hermiticity. The real and imaginary part of each element are written alternately.
+This file shows the adiabatic populations (diagonal elements of the density matrix) and
+off-diagonal coherences at each MD step.
+Populations are listed first, followed by the upper-triangular off-diagonal elements
+with real and imaginary parts written alternately.
 
 .. code-block:: bash
 
-   <MD step> <Re. element 0, 1> <Im. element 0, 1> <Re. element 0, 2> <Im. element 0, 2> ... <Re. element last-1, last> <Im. element last-1, last> 
-   <MD step> <Re. element 0, 1> <Im. element 0, 1> <Re. element 0, 2> <Im. element 0, 2> ... <Re. element last-1, last> <Im. element last-1, last> 
-   ... 
+   <MD step> <pop 0> <pop 1> ... <pop last> <Re(0,1)> <Im(0,1)> <Re(0,2)> <Im(0,2)> ... <Re(last-1,last)> <Im(last-1,last)>
+   <MD step> <pop 0> <pop 1> ... <pop last> <Re(0,1)> <Im(0,1)> <Re(0,2)> <Im(0,2)> ... <Re(last-1,last)> <Im(last-1,last)>
+   ...
 
 - NACME
 
@@ -144,9 +121,9 @@ This file shows nonadiabatic coupling matrix elements at each MD step. Only the 
 
 .. code-block:: bash
 
-   <MD step> <element 0, 1> <element 0, 2> ... <element last-1, last> 
-   <MD step> <element 0, 1> <element 0, 2> ... <element last-1, last> 
-   ... 
+   <MD step> <element 0, 1> <element 0, 2> ... <element last-1, last>
+   <MD step> <element 0, 1> <element 0, 2> ... <element last-1, last>
+   ...
 
 - SHPROB
 
@@ -156,7 +133,7 @@ This file shows hopping probabilities from the running state to the others at ea
 
    <MD step> <P(running -> 0)> <P(running -> 1)> ... <P(running -> last)>
    <MD step> <P(running -> 0)> <P(running -> 1)> ... <P(running -> last)>
-   ... 
+   ...
 
 - SHSTATE
 
@@ -166,7 +143,43 @@ This file shows the running state at each MD step.
 
    <MD step> <running>
    <MD step> <running>
-   ... 
+   ...
+
+
+Output Files by MQC Method
+'''''''''''''''''''''''''''''''
+
+The following table summarizes which output files are produced by each MQC method
+at the default verbosity (``verbosity=0``).
+Multi-trajectory methods (CT, CTv2) write per-trajectory output under ``TRAJ_N/md/``.
+
++----------------+------------+------------+----------+-------+---------+---------+
+| File           | BOMD       | Eh         | SH       | SHXF  | EhXF    | SHXFv2  |
++================+============+============+==========+=======+=========+=========+
+| MOVIE.xyz      | \+         | \+         | \+       | \+    | \+      | \+      |
++----------------+------------+------------+----------+-------+---------+---------+
+| FINAL.xyz      | \+         | \+         | \+       | \+    | \+      | \+      |
++----------------+------------+------------+----------+-------+---------+---------+
+| DENSITY        |            | \+         | \+       | \+    | \+      | \+      |
++----------------+------------+------------+----------+-------+---------+---------+
+| NACME          |            | \+         | \+       | \+    | \+      | \+      |
++----------------+------------+------------+----------+-------+---------+---------+
+| SHSTATE        |            |            | \+       | \+    | \+      | \+      |
++----------------+------------+------------+----------+-------+---------+---------+
+| SHPROB         |            |            | \+       | \+    | \+      | \+      |
++----------------+------------+------------+----------+-------+---------+---------+
+
++----------------+------------+------------+
+| File           | CT         | CTv2       |
++================+============+============+
+| MOVIE.xyz      | \+         | \+         |
++----------------+------------+------------+
+| FINAL.xyz      | \+         | \+         |
++----------------+------------+------------+
+| DENSITY        | \+         | \+         |
++----------------+------------+------------+
+| NACME          | \+         | \+         |
++----------------+------------+------------+
 
 For a quick test of PyUNIxMD, see :ref:`Quick Start <Quick Start>` . Also, you can refer to scripts and log files in '$PYUNIXMDHOME/examples/' directory for practical calculations.
 
@@ -225,7 +238,7 @@ See :ref:`QED_calculator <Objects QED_calculator>` for the list.
 
 **Line 20** sets a thermostat. THERMO_TYPE is a name of Python class specifying how to control temperature. See :ref:`Thermostat <Objects Thermostat>` for the list.
 
-**Line 22** determines a dynamics method you want to use. MD_TYPE is a name of Python class specifying one of MQC_QED methods (BOMD, SH, SHXF). See :ref:`MQC_QED <Objects MQC_QED>` for the details.
+**Line 22** determines a dynamics method you want to use. MD_TYPE is a name of Python class specifying one of MQC_QED methods (BOMD, Eh, SH, SHXF, CT). See :ref:`MQC_QED <Objects MQC_QED>` for the details.
 
 **Line 24** runs the dynamics calculation.
 
@@ -240,29 +253,40 @@ After the polariton dynamics is finished, you will obtain similar file trees as 
 (The latter three directories are optional). 'RESTART.bin' is a binary used to restart a dynamics calculation.
 See :ref:`MQC_QED <Objects MQC_QED>` for the details.
 
-Instead of BO-related output files (BOPOP, BOCOH, NACME), several QED-related output files (QEDPOPA, QEDCOHA, QEDPOPD, QEDCOHD, PNACME) will be generated.
-The same output files (MDENERGY, MOVIE.xyz, FINAL.xyz, SHPROB, SHSTATE) will be skipped for polariton dynamics.
+Instead of BO-related output files (DENSITY, NACME), several QED-related output files (QEDPOPA, QEDCOHA, QEDPOPD, QEDCOHD, PNACME) will be generated.
+The same output files (MOVIE.xyz, FINAL.xyz, SHPROB, SHSTATE) are produced for polariton dynamics.
+In addition, polariton dynamics writes a separate ``MDENERGY`` file for energy information.
+
+- MDENERGY
+
+This file shows MD energies and energies of polaritonic states.
+
+.. code-block:: bash
+
+   <MD step> <kinetic energy> <potential energy> <total MD energy> <polaritonic energy 0> <polaritonic energy 1> ...
+   <MD step> <kinetic energy> <potential energy> <total MD energy> <polaritonic energy 0> <polaritonic energy 1> ...
+   ...
 
 - QEDPOPA, QEDPOPD
 
-This files show the polaritonic (with suffix 'A') and uncoupled (with suffix 'D') populations
+These files show the polaritonic (with suffix 'A') and uncoupled (with suffix 'D') populations
 (diagonal elements of the density matrix) at each MD step.
 
 .. code-block:: bash
 
-   <MD step> <population of state 0> <population of state 1> ... <population of last state> 
-   <MD step> <population of state 0> <population of state 1> ... <population of last state> 
-   ... 
+   <MD step> <population of state 0> <population of state 1> ... <population of last state>
+   <MD step> <population of state 0> <population of state 1> ... <population of last state>
+   ...
 
-- QEDCOHA, QEDCOHD 
+- QEDCOHA, QEDCOHD
 
-This files show off-diagonal elements of the correponding density matrix at each MD step. Only the upper triangular portions are given because of hermiticity. The real and imaginary part of each element are written alternately.
+These files show off-diagonal elements of the corresponding density matrix at each MD step. Only the upper triangular portions are given because of hermiticity. The real and imaginary part of each element are written alternately.
 
 .. code-block:: bash
 
-   <MD step> <Re. element 0, 1> <Im. element 0, 1> <Re. element 0, 2> <Im. element 0, 2> ... <Re. element last-1, last> <Im. element last-1, last> 
-   <MD step> <Re. element 0, 1> <Im. element 0, 1> <Re. element 0, 2> <Im. element 0, 2> ... <Re. element last-1, last> <Im. element last-1, last> 
-   ... 
+   <MD step> <Re. element 0, 1> <Im. element 0, 1> <Re. element 0, 2> <Im. element 0, 2> ... <Re. element last-1, last> <Im. element last-1, last>
+   <MD step> <Re. element 0, 1> <Im. element 0, 1> <Re. element 0, 2> <Im. element 0, 2> ... <Re. element last-1, last> <Im. element last-1, last>
+   ...
 
 - PNACME
 
@@ -270,9 +294,48 @@ This file shows nonadiabatic coupling matrix elements between the polaritonic st
 
 .. code-block:: bash
 
-   <MD step> <element 0, 1> <element 0, 2> ... <element last-1, last> 
-   <MD step> <element 0, 1> <element 0, 2> ... <element last-1, last> 
-   ... 
+   <MD step> <element 0, 1> <element 0, 2> ... <element last-1, last>
+   <MD step> <element 0, 1> <element 0, 2> ... <element last-1, last>
+   ...
+
+
+Output Files by MQC_QED Method
+'''''''''''''''''''''''''''''''''
+
+The following table summarizes which output files are produced by each MQC_QED method
+at the default verbosity (``verbosity=0``).
+The multi-trajectory method (CT) writes per-trajectory output under ``TRAJ_N/md/``.
+
+.. note:: QED coefficient files (QEDCOEFA, QEDCOEFD) are always written when ``elec_object="coefficient"``.
+   Population and coherence files (QEDPOPA, QEDCOHA, QEDPOPD, QEDCOHD) require ``l_print_dm=True`` (default).
+
++----------------+--------+------+------+------+------+
+| File           | BOMD   | Eh   | SH   | SHXF | CT   |
++================+========+======+======+======+======+
+| MOVIE.xyz      | \+     | \+   | \+   | \+   | \+   |
++----------------+--------+------+------+------+------+
+| FINAL.xyz      | \+     | \+   | \+   | \+   | \+   |
++----------------+--------+------+------+------+------+
+| MDENERGY       | \+     | \+   | \+   | \+   | \+   |
++----------------+--------+------+------+------+------+
+| QEDCOEFA       |        | \+   | \+   | \+   | \+   |
++----------------+--------+------+------+------+------+
+| QEDCOEFD       |        | \+   | \+   | \+   | \+   |
++----------------+--------+------+------+------+------+
+| QEDPOPA        |        | \+   | \+   | \+   | \+   |
++----------------+--------+------+------+------+------+
+| QEDCOHA        |        | \+   | \+   | \+   | \+   |
++----------------+--------+------+------+------+------+
+| QEDPOPD        |        | \+   | \+   | \+   | \+   |
++----------------+--------+------+------+------+------+
+| QEDCOHD        |        | \+   | \+   | \+   | \+   |
++----------------+--------+------+------+------+------+
+| PNACME         |        | \+   | \+   | \+   | \+   |
++----------------+--------+------+------+------+------+
+| SHSTATE        |        |      | \+   | \+   |      |
++----------------+--------+------+------+------+------+
+| SHPROB         |        |      | \+   | \+   |      |
++----------------+--------+------+------+------+------+
 
 For a quick test for polariton dynamics, it will be added later.
 

@@ -274,3 +274,33 @@ shxf.py
    :members:
    :show-inheritance:
 
+ehxf.py
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.. automodule:: mqc.ehxf
+   :members:
+   :show-inheritance:
+
+ctv2.py
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.. automodule:: mqc.ctv2
+   :members:
+   :show-inheritance:
+
+shxfv2.py
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.. automodule:: mqc.shxfv2
+   :members:
+   :show-inheritance:
+
+gpu_backend.py
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.. automodule:: mqc.gpu_backend
+   :members:
+   :show-inheritance:
+
+ctv2_gpu.py
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.. automodule:: mqc.ctv2_gpu
+   :members:
+   :show-inheritance:
+

@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 from mqc_runner import MQCArgs, run_case
 
-# Usage: 
+# Usage:
 # Run pytest --markers to see registered markers
 # e.g. Test all mqc runs in the Shin-Metiu model: pytest -m mqc -v
 # e.g. Test SHXF runs in the Shin-Metiu model: pytest -m shxf -v
@@ -20,25 +20,30 @@ KEY_RESCALE = ["e", "v", "p", "a"]
 KEY_REJECT = ["+", "-"]
 KEY_WIDTH = ["FG", "TD"]
 
+# Mapping from output directory to reference directory (only when they differ)
+REF_OVERRIDE = {
+    "TEST-CTv2_PAR": "TEST-CTv2",
+}
+
 # Define the test matrix you care about
 ALL_CASES = [
     # BOMD, Eh
     pytest.param(
-        MQCArgs(md=0), "TEST-BOMD", 
+        MQCArgs(md=0), "TEST-BOMD",
         marks=(pytest.mark.mqc, pytest.mark.bomd)
     ),
-    
+
     pytest.param(
-        MQCArgs(md=1), "TEST-Eh", 
+        MQCArgs(md=1), "TEST-Eh",
         marks=(pytest.mark.mqc, pytest.mark.eh)
     ),
 
     # SH
-    *[ 
+    *[
         pytest.param(
-            MQCArgs(md=2, rescale=r, reject=j), f"TEST-SH-{KEY_RESCALE[r]}{KEY_REJECT[j]}", 
+            MQCArgs(md=2, rescale=r, reject=j), f"TEST-SH-{KEY_RESCALE[r]}{KEY_REJECT[j]}",
             marks=(pytest.mark.mqc, pytest.mark.sh)
-        ) 
+        )
         for r in range(4) for j in range(2)
      ],
 
@@ -70,6 +75,11 @@ ALL_CASES = [
         MQCArgs(md=6), "TEST-CTv2", marks=(pytest.mark.mqc, pytest.mark.ctv2)
     ),
 
+    # CTv2 parallel (ncpus=2) - writes to TEST-CTv2_PAR, compares against TEST-CTv2 reference
+    pytest.param(
+        MQCArgs(md=6, ncpus=2), "TEST-CTv2_PAR", marks=(pytest.mark.mqc, pytest.mark.ctv2)
+    ),
+
     # SHXFv2
     *[
         pytest.param(
@@ -78,23 +88,58 @@ ALL_CASES = [
         )
         for r in range(4) for j in range(2)
      ],
+
+    # CTv2_GPU
+    pytest.param(
+        MQCArgs(md=8), "TEST-CTv2_GPU", marks=(pytest.mark.mqc, pytest.mark.ctv2_gpu)
+    ),
 ]
 
-def _load_numeric(path: Path, is_xyz: bool):
-    if is_xyz:
+def _load_numeric(path: Path, tg: str):
+    if tg.endswith(".xyz"):
         return np.loadtxt(path, skiprows=2, usecols=(1, 2))
     return np.loadtxt(path, skiprows=1)
 
+def _load_energy_from_movie_xyz(path: Path):
+    """Extract energy data from MOVIE.xyz comment lines.
+
+    Format: step=N Ekin=X Epot=X Etot=X E0=X E1=X ...
+    Returns array of [step, Ekin, Epot, Etot, E0, E1, ...] per frame.
+    """
+    energies = []
+    with open(path, 'r') as f:
+        lines = f.readlines()
+
+    nat = int(lines[0].strip())
+    frame_lines = nat + 2  # nat + natom line + comment line
+
+    for i in range(0, len(lines), frame_lines):
+        comment_line = lines[i + 1].strip()
+        # Parse key=value pairs
+        row = []
+        for token in comment_line.split():
+            if '=' in token:
+                _, value = token.split('=', 1)
+                row.append(float(value))
+        energies.append(row)
+
+    return np.array(energies)
+
 def _compare_file(out_file: Path, ref_file: Path, tg: str):
 
-    is_xyz = tg.endswith(".xyz")
-    out_data = _load_numeric(out_file, is_xyz)
-    ref_data = _load_numeric(ref_file, is_xyz)
+    if tg == "MOVIE.xyz":
+        # Compare energy data extracted from MOVIE.xyz comment lines
+        out_data = _load_energy_from_movie_xyz(out_file)
+        ref_data = _load_energy_from_movie_xyz(ref_file)
+    else:
+        out_data = _load_numeric(out_file, tg)
+        ref_data = _load_numeric(ref_file, tg)
 
     assert out_data.shape == ref_data.shape, f"Shape mismatch: {tg}"
 
     # Compare absolute values for phase-dependent quantities (eigenvector phase convention)
-    if tg in ["NACME", "BOCOH"]:
+    if tg in ["NACME", "DENSITY"]:
+        # For DENSITY, coherences can have phase-dependent signs
         out_data = np.abs(out_data)
         ref_data = np.abs(ref_data)
 
@@ -106,20 +151,23 @@ def test_mqc_case(args, case_id):
     run_case(args)
     #return
     # Determine what to compare
-    targets = ["MDENERGY", "FINAL.xyz"]
+    # Energy data now in MOVIE.xyz comment line (replaces MDENERGY)
+    targets = ["MOVIE.xyz", "FINAL.xyz"]
 
     if args.md != 0:    # not BOMD
-        targets += ["BOPOP", "NACME"]
+        # DENSITY replaces BOPOP + BOCOH
+        targets += ["DENSITY", "NACME"]
 
     if args.md in (2, 3, 4, 7):   # have the SH feature (SH, SHXF, EhXF, SHXFv2)
         targets += ["SHSTATE", "SHPROB"]
 
     # Compare test results and the reference
+    # Use REF_OVERRIDE to map output dir to a different reference dir when needed
+    ref_id = Path(REF_OVERRIDE.get(case_id, case_id))
     case_id = Path(case_id)
     for tg in targets:
-        if args.md not in (5, 6):    # not CT or CTv2
-            _compare_file(case_id / "md" / tg, REF_ROOT / case_id / "md" / tg, tg)
-        else:    # CT or CTv2
-            _compare_file(case_id / "TRAJ_1" / "md" / tg, REF_ROOT / case_id / "TRAJ_1" / "md" / tg, tg)
-            _compare_file(case_id / "TRAJ_2" / "md" / tg, REF_ROOT / case_id / "TRAJ_2" / "md" / tg, tg)
-
+        if args.md not in (5, 6, 8):    # not CT or CTv2 or CTv2_GPU
+            _compare_file(case_id / "md" / tg, REF_ROOT / ref_id / "md" / tg, tg)
+        else:    # CT or CTv2 or CTv2_GPU
+            _compare_file(case_id / "TRAJ_1" / "md" / tg, REF_ROOT / ref_id / "TRAJ_1" / "md" / tg, tg)
+            _compare_file(case_id / "TRAJ_2" / "md" / tg, REF_ROOT / ref_id / "TRAJ_2" / "md" / tg, tg)

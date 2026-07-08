@@ -1,33 +1,33 @@
      1
-  Step:     0            Position(A)                                  Velocity(au)
+step=0 Ekin=0.36720000 Epot=-0.22281728 Etot=0.14438272 E0=-0.22782191 E1=-0.22281728
 X1       -1.05835450     0.02000000
      1
-  Step:     1            Position(A)                                  Velocity(au)
+step=1 Ekin=0.36821749 Epot=-0.22384211 Etot=0.14437538 E0=-0.22855928 E1=-0.22384211
 X1       -1.00539111     0.02002769
      1
-  Step:     2            Position(A)                                  Velocity(au)
+step=2 Ekin=0.37408722 Epot=-0.22969962 Etot=0.14438760 E0=-0.22969962 E1=-0.22436472
 X1       -0.95237252     0.02018669
      1
-  Step:     3            Position(A)                                  Velocity(au)
+step=3 Ekin=0.37551218 Epot=-0.23113763 Etot=0.14437455 E0=-0.23113763 E1=-0.22450475
 X1       -0.89891368     0.02022510
      1
-  Step:     4            Position(A)                                  Velocity(au)
+step=4 Ekin=0.37708595 Epot=-0.23271834 Etot=0.14436761 E0=-0.23271834 E1=-0.22440941
 X1       -0.84534589     0.02026744
      1
-  Step:     5            Position(A)                                  Velocity(au)
+step=5 Ekin=0.37871963 Epot=-0.23435530 Etot=0.14436433 E0=-0.23435530 E1=-0.22416814
 X1       -0.79166302     0.02031129
      1
-  Step:     6            Position(A)                                  Velocity(au)
+step=6 Ekin=0.38036956 Epot=-0.23600683 Etot=0.14436273 E0=-0.23600683 E1=-0.22382530
 X1       -0.73786315     0.02035549
      1
-  Step:     7            Position(A)                                  Velocity(au)
+step=7 Ekin=0.38201450 Epot=-0.23765261 Etot=0.14436189 E0=-0.23765261 E1=-0.22340376
 X1       -0.68394640     0.02039946
      1
-  Step:     8            Position(A)                                  Velocity(au)
+step=8 Ekin=0.38364358 Epot=-0.23928214 Etot=0.14436143 E0=-0.23928214 E1=-0.22291642
 X1       -0.62991387     0.02044291
      1
-  Step:     9            Position(A)                                  Velocity(au)
+step=9 Ekin=0.38525083 Epot=-0.24088966 Etot=0.14436117 E0=-0.24088966 E1=-0.22237136
 X1       -0.57576719     0.02048568
      1
-  Step:    10            Position(A)                                  Velocity(au)
+step=10 Ekin=0.38683282 Epot=-0.24247182 Etot=0.14436101 E0=-0.24247182 E1=-0.22177417
 X1       -0.52150830     0.02052770

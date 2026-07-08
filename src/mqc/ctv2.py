@@ -1,10 +1,67 @@
 from __future__ import division
 from lib.libctmqcv2 import el_run
 from mqc.mqc import MQC
+from mqc.gpu_backend import get_backend
 from misc import eps, au_to_K, au_to_A, call_name, typewriter, gaussian1d, close_files
-import os, shutil, textwrap
+import os, shutil, textwrap, copy
 import numpy as np
 import pickle
+import multiprocessing
+
+# Module-level worker state and functions for multiprocessing
+# Each worker maintains a dict of QM calculators keyed by trajectory index,
+# ensuring each trajectory always uses the same QM object (preserving
+# stateful scratch directories like self.scr_qm_dir across MD steps).
+_worker_qm_dict = {}
+_worker_qm_template = None
+
+def _limit_blas_threads(n):
+    """Limit BLAS thread count via ctypes (works post-fork unlike env vars).
+
+    After fork(), the BLAS thread pool is already initialized so environment
+    variables (OMP_NUM_THREADS, etc.) have no effect. This calls the library's
+    C-level thread-setting function directly.
+    """
+    import ctypes, ctypes.util
+    for lib_name, setter in [('openblas', 'openblas_set_num_threads'),
+                             ('mkl_rt', 'MKL_Set_Num_Threads'),
+                             ('blas', 'openblas_set_num_threads')]:
+        path = ctypes.util.find_library(lib_name)
+        if path:
+            try:
+                lib = ctypes.CDLL(path)
+                getattr(lib, setter)(n)
+            except (OSError, AttributeError):
+                pass
+
+def _init_qm_worker(qm, nthreads):
+    """Pool initializer: store the QM template for on-demand deep copying.
+
+    Also limits BLAS/LAPACK threads per worker to avoid thread oversubscription
+    after fork (where forked BLAS threads can spin or deadlock).
+    """
+    _limit_blas_threads(nthreads)
+    global _worker_qm_template, _worker_qm_dict
+    _worker_qm_template = qm
+    _worker_qm_dict = {}
+
+def _qm_get_data_worker(args):
+    """Worker: run reset_bo + qm.get_data + adjust_nac for one trajectory.
+
+    Each trajectory index gets its own persistent QM deep copy so that
+    stateful attributes (e.g., scr_qm_dir used by copy_files) remain
+    consistent across MD steps.
+    """
+    mol, base_dir, bo_list, dt, istep, calc_coupling, l_adj_nac, itraj = args
+    global _worker_qm_dict, _worker_qm_template
+    if itraj not in _worker_qm_dict:
+        _worker_qm_dict[itraj] = copy.deepcopy(_worker_qm_template)
+    qm = _worker_qm_dict[itraj]
+    mol.reset_bo(calc_coupling)
+    qm.get_data(mol, base_dir, bo_list, dt, istep, calc_force_only=False)
+    if not mol.l_nacme and l_adj_nac:
+        mol.adjust_nac()
+    return mol
 
 class CTv2(MQC):
     """ Class for coupled-trajectory mixed quantum-classical (CTMQC) dynamics
@@ -35,8 +92,10 @@ class CTv2(MQC):
         :param double artifact_expon: Exponent for width for nuclear density estimation (used only when l_traj_gaussian = True)
         :param boolean l_asymp: Terminate dynamics when the trajectory reaches asymptotic region (use this option for model systems only)
         :param double x_fin: Define asymptotic region (a.u.)
-        :param boolean l_real_pop: Use |C_j|^2 for |chi_j|^2/|chi|^2 in quantum momentum calculation.
+        :param boolean l_real_pop: Use \|C_j\|^2 for \|chi_j\|^2/\|chi\|^2 in quantum momentum calculation.
         :param integer t_pc: Phase correction scheme (1: use P, 2: use sum_j nabla S_j)
+        :param use_gpu: GPU acceleration mode. False (CPU, default), True (force GPU), 'auto' (detect GPU)
+        :param integer ncpus: Number of CPUs for parallel QM calculations (1 = serial, default)
     """
     def __init__(self, molecules, thermostat=None, istates=None, dt=0.5, nsteps=1000, nesteps=20, \
         elec_object="coefficient", propagator="rk4", l_print_dm=True, l_adj_nac=True, rho_threshold=0.01, \
@@ -44,7 +103,7 @@ class CTv2(MQC):
         l_crunch=True, l_dc_w_mom=True, l_traj_gaussian=False, \
         t_cons=2, l_etot0=True, l_lap=False,\
         l_en_cons=False, artifact_expon=0.2, l_asymp=False, x_fin=25.0, \
-        l_real_pop=True, t_pc=1):
+        l_real_pop=True, t_pc=1, use_gpu=False, ncpus=1):
         # Save name of MQC dynamics
         self.md_type = self.__class__.__name__
 
@@ -139,9 +198,32 @@ class CTv2(MQC):
         # Variables for aborting dynamics when all trajectories reach asymptotic region
         self.l_asymp = l_asymp
         self.x_fin = x_fin
-        
+
         # Initialize event to print
         self.event = {"DECO": []}
+
+        # Initialize GPU backend for cross-trajectory calculations
+        # Create a dedicated backend instance when GPU is requested,
+        # to avoid issues with global singleton initialization order
+        if use_gpu:
+            from mqc.gpu_backend import GPUBackend
+            self.gpu = GPUBackend(use_gpu)
+        else:
+            self.gpu = get_backend(use_gpu)
+        self.use_gpu = (self.gpu.backend == 'torch')
+
+        if self.use_gpu:
+            try:
+                from mqc import ctv2_gpu
+                self._gpu_kernels = ctv2_gpu.CTv2GPUKernels(self.gpu)
+            except ImportError:
+                self.use_gpu = False
+                self._gpu_kernels = None
+        else:
+            self._gpu_kernels = None
+
+        # CPU parallelization
+        self.ncpus = max(1, int(ncpus))
 
     def run(self, qm, mm=None, output_dir="./", l_save_qm_log=False, l_save_mm_log=False, l_save_scr=True, restart=None):
         """ Run MQC dynamics according to CTMQC dynamics
@@ -168,134 +250,231 @@ class CTv2(MQC):
 
         self.print_init(qm, mm, restart)
 
-        if (restart == None):
-            # Calculate initial input geometry for all trajectories at t = 0.0 s
-            self.istep = -1
-            for itraj in range(self.ntrajs):
-                self.mol = self.mols[itraj]
+        # Set up multiprocessing pool if ncpus > 1
+        l_parallel = (self.ncpus > 1)
+        pool = None
+        if l_parallel:
+            # Check picklability of qm and molecule before creating pool
+            try:
+                pickle.dumps(qm)
+                pickle.dumps(self.mols[0])
+            except (pickle.PicklingError, TypeError, AttributeError) as e:
+                print(f" WARNING: Cannot pickle QM or Molecule objects ({e}), falling back to ncpus=1", flush=True)
+                l_parallel = False
 
-                self.mol.reset_bo(qm.calc_coupling)
-                qm.get_data(self.mol, base_dirs[itraj], bo_list, self.dt, self.istep, calc_force_only=False)
+        if l_parallel:
+            mp_context = multiprocessing.get_context('fork')
+            pool_size = min(self.ncpus, self.ntrajs)
+            # Limit BLAS threads per worker: total cores / pool_size, at least 1
+            ncores = os.cpu_count() or 1
+            nthreads_per_worker = max(1, ncores // pool_size)
+            pool = mp_context.Pool(processes=pool_size, initializer=_init_qm_worker,
+                                   initargs=(qm, nthreads_per_worker))
 
-                # TODO: QM/MM
-                self.mol.get_nacme()
-                
-                self.check_decoherence(itraj)
-                self.check_coherence(itraj)
-                
-                self.update_energy()
-                
-                self.get_state_mom(itraj)
-                
-                self.get_phase(itraj)
+        try:
+            if (restart == None):
+                # Calculate initial input geometry for all trajectories at t = 0.0 s
+                self.istep = -1
 
-            if (self.t_pc != 0):
-                self.get_dS()
+                if l_parallel:
+                    # Parallel QM phase for initialization
+                    worker_args = [
+                        (self.mols[itraj], base_dirs[itraj], bo_list, self.dt, self.istep,
+                         qm.calc_coupling, self.l_adj_nac, itraj)
+                        for itraj in range(self.ntrajs)
+                    ]
+                    results = pool.map(_qm_get_data_worker, worker_args)
+                    for itraj in range(self.ntrajs):
+                        self.mols[itraj] = results[itraj]
 
-            self.calculate_qmom()
-            
-            if (self.l_lap):
-                self.get_d2S()
-            
-            self.set_avg_pop_cons()
-
-            for itraj in range(self.ntrajs):
-
-                self.mol = self.mols[itraj]
-
-                self.write_md_output(itraj, unixmd_dirs[itraj], qm.calc_coupling, self.istep)
-
-                self.print_step(self.istep, itraj)
-
-        #TODO: restart
-        elif (restart == "write"):
-            # Reset initial time step to t = 0.0 s
-            self.istep = -1
-            for itraj in range(self.ntrajs):
-                self.write_md_output(itraj, unixmd_dirs[itraj], qm.calc_coupling, self.istep)
-                self.print_step(self.istep, itraj)
-
-        elif (restart == "append"):
-            # Set initial time step to last successful step of previous dynamics
-            self.istep = self.fstep
-
-        self.istep += 1
-
-        # Main MD loop
-        for istep in range(self.istep, self.nsteps):
-            for itraj in range(self.ntrajs):
-                self.mol = self.mols[itraj]
-
-                self.calculate_force(itraj)
-                self.cl_update_position()
-
-                self.mol.backup_bo(qm.calc_coupling)
-                self.mol.reset_bo(qm.calc_coupling)
-
-                qm.get_data(self.mol, base_dirs[itraj], bo_list, self.dt, self.istep, calc_force_only=False)
-
-                if (not self.mol.l_nacme and self.l_adj_nac):
-                    self.mol.adjust_nac()
-
-                #TODO: QM/MM
-
-                self.calculate_force(itraj)
-                self.cl_update_velocity()
-
-                self.mol.get_nacme()
-                
-                self.update_energy()
-
-                el_run(self, itraj)
-
-                #TODO: thermostat
-                #if (self.thermo != None):
-                #    self.thermo.run(self)
-
-                self.check_decoherence(itraj)
-                self.check_coherence(itraj)
-                
-                self.update_energy()
-
-                self.get_state_mom(itraj)
-                
-                self.get_phase(itraj)
-            
-            if (self.t_pc != 0):
-                self.get_dS()
-            
-            self.calculate_qmom()
-            
-            if (self.l_lap):
-                self.get_d2S()
-            
-            self.set_avg_pop_cons()
-            
-            for itraj in range(self.ntrajs):
-                self.mol = self.mols[itraj]
-
-                if ((istep + 1) % self.out_freq == 0):
-                    self.write_md_output(itraj, unixmd_dirs[itraj], qm.calc_coupling, istep)
-                    self.print_step(istep, itraj)
-                if (istep == self.nsteps - 1):
-                    self.write_final_xyz(unixmd_dirs[itraj], istep)
-
-            self.fstep = istep
-            #restart_file = os.path.join(abs_path_output_dir, "RESTART.bin")
-            #with open(restart_file, 'wb') as f:
-            #    pickle.dump({'qm':qm, 'md':self}, f)
-
-            for itraj in range(self.ntrajs):
-                l_abort = True
-                det = self.mols[itraj].pos[0, 0] * self.mols[itraj].vel[0, 0]
-                if (self.l_asymp and det > 0. and np.abs(self.mols[itraj].pos[0, 0]) > np.abs(self.x_fin)):
-                    pass
+                    # Post-QM serial phase for initialization
+                    for itraj in range(self.ntrajs):
+                        self.mol = self.mols[itraj]
+                        self.mol.get_nacme()
+                        self.check_decoherence(itraj)
+                        self.check_coherence(itraj)
+                        self.update_energy()
+                        self.get_state_mom(itraj)
+                        self.get_phase(itraj)
                 else:
-                    l_abort = False
+                    for itraj in range(self.ntrajs):
+                        self.mol = self.mols[itraj]
+                        self.mol.reset_bo(qm.calc_coupling)
+                        qm.get_data(self.mol, base_dirs[itraj], bo_list, self.dt, self.istep, calc_force_only=False)
+
+                        # TODO: QM/MM
+                        self.mol.get_nacme()
+
+                        self.check_decoherence(itraj)
+                        self.check_coherence(itraj)
+
+                        self.update_energy()
+
+                        self.get_state_mom(itraj)
+
+                        self.get_phase(itraj)
+
+                if (self.t_pc != 0):
+                    self.get_dS()
+
+                self.calculate_qmom()
+                if self.use_gpu and self._gpu_kernels is not None:
+                    self.gpu.synchronize()
+
+                if (self.l_lap):
+                    self.get_d2S()
+
+                self.set_avg_pop_cons()
+
+                for itraj in range(self.ntrajs):
+
+                    self.mol = self.mols[itraj]
+
+                    self.write_md_output(itraj, unixmd_dirs[itraj], qm.calc_coupling, self.istep)
+
+                    self.print_step(self.istep, itraj)
+
+            #TODO: restart
+            elif (restart == "write"):
+                # Reset initial time step to t = 0.0 s
+                self.istep = -1
+                for itraj in range(self.ntrajs):
+                    self.write_md_output(itraj, unixmd_dirs[itraj], qm.calc_coupling, self.istep)
+                    self.print_step(self.istep, itraj)
+
+            elif (restart == "append"):
+                # Set initial time step to last successful step of previous dynamics
+                self.istep = self.fstep
+
+            self.istep += 1
+
+            # Main MD loop
+            for istep in range(self.istep, self.nsteps):
+
+                if l_parallel:
+                    # Phase 1: Pre-QM (serial, fast)
+                    for itraj in range(self.ntrajs):
+                        self.mol = self.mols[itraj]
+                        self.calculate_force(itraj)
+                        self.cl_update_position()
+                        self.mol.backup_bo(qm.calc_coupling)
+
+                    # Phase 2: QM (parallel)
+                    worker_args = [
+                        (self.mols[itraj], base_dirs[itraj], bo_list, self.dt, istep,
+                         qm.calc_coupling, self.l_adj_nac, itraj)
+                        for itraj in range(self.ntrajs)
+                    ]
+                    updated_mols = pool.map(_qm_get_data_worker, worker_args)
+                    for itraj in range(self.ntrajs):
+                        self.mols[itraj] = updated_mols[itraj]
+
+                    # Phase 3: Post-QM (serial, fast)
+                    for itraj in range(self.ntrajs):
+                        self.mol = self.mols[itraj]
+
+                        #TODO: QM/MM
+
+                        self.calculate_force(itraj)
+                        self.cl_update_velocity()
+
+                        self.mol.get_nacme()
+
+                        self.update_energy()
+
+                        el_run(self, itraj)
+
+                        #TODO: thermostat
+                        #if (self.thermo != None):
+                        #    self.thermo.run(self)
+
+                        self.check_decoherence(itraj)
+                        self.check_coherence(itraj)
+
+                        self.update_energy()
+
+                        self.get_state_mom(itraj)
+
+                        self.get_phase(itraj)
+
+                else:
+                    for itraj in range(self.ntrajs):
+                        self.mol = self.mols[itraj]
+                        self.calculate_force(itraj)
+                        self.cl_update_position()
+                        self.mol.backup_bo(qm.calc_coupling)
+                        self.mol.reset_bo(qm.calc_coupling)
+                        qm.get_data(self.mol, base_dirs[itraj], bo_list, self.dt, istep, calc_force_only=False)
+
+                        if (not self.mol.l_nacme and self.l_adj_nac):
+                            self.mol.adjust_nac()
+
+                        #TODO: QM/MM
+
+                        self.calculate_force(itraj)
+                        self.cl_update_velocity()
+
+                        self.mol.get_nacme()
+
+                        self.update_energy()
+
+                        el_run(self, itraj)
+
+                        #TODO: thermostat
+                        #if (self.thermo != None):
+                        #    self.thermo.run(self)
+
+                        self.check_decoherence(itraj)
+                        self.check_coherence(itraj)
+
+                        self.update_energy()
+
+                        self.get_state_mom(itraj)
+
+                        self.get_phase(itraj)
+
+                if (self.t_pc != 0):
+                    self.get_dS()
+
+                self.calculate_qmom()
+                if self.use_gpu and self._gpu_kernels is not None:
+                    self.gpu.synchronize()
+
+                if (self.l_lap):
+                    self.get_d2S()
+
+                self.set_avg_pop_cons()
+
+                for itraj in range(self.ntrajs):
+                    self.mol = self.mols[itraj]
+
+                    if ((istep + 1) % self.out_freq == 0):
+                        self.write_md_output(itraj, unixmd_dirs[itraj], qm.calc_coupling, istep)
+                        self.print_step(istep, itraj)
+                    if (istep == self.nsteps - 1):
+                        self.write_final_xyz(unixmd_dirs[itraj], istep)
+
+                self.fstep = istep
+                #restart_file = os.path.join(abs_path_output_dir, "RESTART.bin")
+                #with open(restart_file, 'wb') as f:
+                #    pickle.dump({'qm':qm, 'md':self}, f)
+
+                for itraj in range(self.ntrajs):
+                    l_abort = True
+                    det = self.mols[itraj].pos[0, 0] * self.mols[itraj].vel[0, 0]
+                    if (self.l_asymp and det > 0. and np.abs(self.mols[itraj].pos[0, 0]) > np.abs(self.x_fin)):
+                        pass
+                    else:
+                        l_abort = False
+                        break
+
+                if(l_abort):
                     break
-            
-            if(l_abort):
-                break
+
+        finally:
+            if pool is not None:
+                pool.terminate()
+                pool.join()
 
         # Close open file handles for all trajectory directories
         for itraj in range(self.ntrajs):
@@ -604,11 +783,17 @@ class CTv2(MQC):
         # 1. Calculate variances for each trajectory
         self.calculate_sigma()
 
-        # 2. Calculate slope
-        self.calculate_slope()
-
-        # 3. Calculate the center of quantum momentum
-        self.calculate_center()
+        # 2-3. Calculate slope and center (fused on GPU if available)
+        if self.use_gpu and self._gpu_kernels is not None:
+            # Fused GPU implementation with persistent tensors and batched states:
+            # - Keeps g_i_IJ on GPU, avoiding round-trip transfer
+            # - Uses persistent GPU tensors to avoid repeated allocation
+            # - Computes g_i_IJ for all states in single batched operation
+            self._gpu_kernels.calculate_slope_and_center(self)
+        else:
+            # CPU implementation: separate slope and center calculations
+            self.calculate_slope()
+            self.calculate_center()
 
         # 4. Compute quantum momentum (vectorized)
         # G_{\nu, ij} = (\nabla_\nu|\chi_i|^2 / |\chi_i|^2  + \nabla_\nu|\chi_j|^2/|\chi_j|^2)
@@ -693,6 +878,12 @@ class CTv2(MQC):
     def calculate_slope(self):
         """ Routine to calculate slope
         """
+        # Use GPU-accelerated version if available
+        if self.use_gpu and self._gpu_kernels is not None:
+            self._gpu_kernels.calculate_slope(self)
+            return
+
+        # CPU implementation (vectorized NumPy)
         # Vectorized data extraction
         pos = np.array([mol.pos for mol in self.mols])  # (ntrajs, nat_qm, ndim)
         rho = np.array([np.diag(mol.rho.real) for mol in self.mols])  # (ntrajs, nst)
@@ -767,6 +958,12 @@ class CTv2(MQC):
     def calculate_center(self):
         """ Routine to calculate center or intercept of quantum momentum
         """
+        # Use GPU-accelerated version if available
+        if self.use_gpu and self._gpu_kernels is not None:
+            self._gpu_kernels.calculate_center(self)
+            return
+
+        # CPU implementation (vectorized NumPy)
         # Vectorized data extraction
         pos = np.array([mol.pos for mol in self.mols])  # (ntrajs, nat_qm, ndim)
 
@@ -861,11 +1058,12 @@ class CTv2(MQC):
                         intercept_val = -(self.avg_R[ist] * inv_sigma_i_sq + self.avg_R[jst] * inv_sigma_j_sq)
                         self.intercept_bo[:, index_lk, :, :] = np.where(valid_sigma[np.newaxis, :, :], intercept_val[np.newaxis, :, :], 0.0)
 
-                    # Calculate center_bo
+                    # Calculate center_bo (safe division to avoid RuntimeWarning)
                     slope_bo_valid = np.abs(self.slope_bo[:, index_lk, :, :]) >= self.small
+                    slope_bo_safe = np.where(slope_bo_valid, self.slope_bo[:, index_lk, :, :], 1.0)
                     self.center_bo[:, index_lk, :, :] = np.where(
                         slope_bo_valid,
-                        self.intercept_bo[:, index_lk, :, :] / self.slope_bo[:, index_lk, :, :],
+                        self.intercept_bo[:, index_lk, :, :] / slope_bo_safe,
                         pos
                     )
                     index_lk += 1
@@ -1051,6 +1249,9 @@ class CTv2(MQC):
           t_cons                   = {self.t_cons:>16d}
           l_etot0                  = {self.l_etot0:>16}
           l_lap                    = {self.l_lap:>16}
+          use_gpu                  = {self.use_gpu:>16}
+          gpu_device               = {self.gpu.device_name:>16s}
+          ncpus                    = {self.ncpus:>16d}
         """)
 
         print (ct_info, flush=True)

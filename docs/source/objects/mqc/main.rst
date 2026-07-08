@@ -28,6 +28,14 @@ The class names are tabulated below.
 +----------------+----------------+
 | SHXF           | SHXF           |
 +----------------+----------------+
+| EhXF           | EhXF           |
++----------------+----------------+
+| CTMQC          | CT             |
++----------------+----------------+
+| CTv2           | CTv2           |
++----------------+----------------+
+| SHXFv2         | SHXFv2         |
++----------------+----------------+
 
 For example, a MD object of the FSSH method can be created as follows.
 
