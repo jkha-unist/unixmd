@@ -582,19 +582,22 @@ class CTv2(MQC):
             self.etot0[itrajectory] = self.mol.etot
 
         # Vectorized state momentum calculation
-        energies = np.array([st.energy for st in self.mol.states])  # (nst,)
-        if (self.l_etot0):
-            alpha = (self.etot0[itrajectory] - energies) / self.mol.ekin
+        if (self.mol.ekin > self.small):
+            energies = np.array([st.energy for st in self.mol.states])  # (nst,)
+            if (self.l_etot0):
+                alpha = (self.etot0[itrajectory] - energies) / self.mol.ekin
+            else:
+                alpha = (self.mol.etot - energies) / self.mol.ekin
+
+            alpha = np.maximum(alpha, 0.)  # Clip negative values
+            sqrt_alpha = np.sqrt(alpha)  # (nst,)
+
+            # vel: (nat_qm, ndim), mass: (nat_qm,)
+            # mom shape: (nst, nat_qm, ndim)
+            vel_mass = self.mol.vel[:self.nat_qm, :] * self.mol.mass[:self.nat_qm, np.newaxis]  # (nat_qm, ndim)
+            self.mom[itrajectory, :, :, :] = sqrt_alpha[:, np.newaxis, np.newaxis] * vel_mass[np.newaxis, :, :]
         else:
-            alpha = (self.mol.etot - energies) / self.mol.ekin
-
-        alpha = np.maximum(alpha, 0.)  # Clip negative values
-        sqrt_alpha = np.sqrt(alpha)  # (nst,)
-
-        # vel: (nat_qm, ndim), mass: (nat_qm,)
-        # mom shape: (nst, nat_qm, ndim)
-        vel_mass = self.mol.vel[:self.nat_qm, :] * self.mol.mass[:self.nat_qm, np.newaxis]  # (nat_qm, ndim)
-        self.mom[itrajectory, :, :, :] = sqrt_alpha[:, np.newaxis, np.newaxis] * vel_mass[np.newaxis, :, :]
+            self.mom[itrajectory, :, :, :] = 0.0
 
     def calculate_force(self, itrajectory):
         """ Routine to calculate force

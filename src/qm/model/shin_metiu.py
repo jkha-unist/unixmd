@@ -67,7 +67,7 @@ class Shin_Metiu(Model):
         self.H += np.diag(Vs)
 
         # Diagonalization
-        ws, unitary = np.linalg.eig(self.H)
+        ws, unitary = np.linalg.eigh(self.H)
 
         # Sorting eigenvalues in the ascending order and the corresponding eigenvectors
         idx = np.argsort(ws)
