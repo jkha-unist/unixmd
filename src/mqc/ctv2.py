@@ -1094,6 +1094,112 @@ class CTv2(MQC):
                     )
                     index_lk += 1
 
+    def calculate_qpot_force(self):
+        """ Routine to calculate the quantum potential and its nuclear force
+
+            The nuclear density is the same Gaussian mixture used for the quantum momentum,
+            kept frozen while differentiating: F^QP = -\\nabla Q evaluated at each trajectory
+            position (a trajectory's own Gaussian center is a frozen parameter of the density).
+            Requires calculate_sigma/calculate_slope to be called first (via calculate_qmom).
+        """
+        pos = np.array([mol.pos for mol in self.mols])  # (ntrajs, nat_qm, ndim)
+        rho = np.array([np.diag(mol.rho.real) for mol in self.mols])  # (ntrajs, nst)
+        rho_avg = np.sum(rho, axis=0) / self.ntrajs  # (nst,)
+        valid_state = rho_avg >= self.lower_th  # (nst,)
+
+        inv_mass = 1. / self.mol.mass[0:self.nat_qm]  # (nat_qm,)
+        inv_2m = 0.5 * inv_mass  # (nat_qm,)
+
+        sigma_sq = self.sigma ** 2  # (nst, nat_qm, ndim)
+        inv_sigma_sq = np.where(sigma_sq > self.small, 1. / sigma_sq, 0.0)  # 1/inf = 0 for invalid states
+        inv_sigma_sq = np.where(valid_state[:, np.newaxis, np.newaxis], inv_sigma_sq, 0.0)
+
+        self.qpot.fill(0.)
+        self.qpot_force.fill(0.)
+
+        if (self.l_traj_gaussian):
+            # Arithmetic mixture of trajectory-centered Gaussians: components (state, trajectory)
+            valid_traj = (self.g_I / self.ntrajs) >= self.small  # (ntrajs,)
+            g_safe = np.where(valid_traj, self.g_I, 1.0)  # (ntrajs,)
+
+            pos_diff = pos[:, np.newaxis, :, :] - pos[np.newaxis, :, :, :]  # (ntrajs, ntrajs, nat_qm, ndim)
+
+            # First pass over states: w = \nabla|\chi|^2 / |\chi|^2
+            w = np.zeros((self.ntrajs, self.nat_qm, self.ndim))
+            for ist in range(self.nst):
+                if (not valid_state[ist]):
+                    continue
+                u = pos_diff * inv_sigma_sq[ist][np.newaxis, np.newaxis, :, :]  # (I, J, a, d)
+                w -= np.einsum('ij,ijad->iad', self.g_i_IJ[ist], u)
+            w /= g_safe[:, np.newaxis, np.newaxis]
+
+            # Second pass over states: accumulate per-component force contractions
+            force = np.zeros((self.ntrajs, self.nat_qm, self.ndim))
+            pi_s = np.zeros((self.ntrajs))  # \sum_k \pi_k s_k
+            pi_lam = np.zeros((self.ntrajs, self.nat_qm, self.ndim))  # \sum_k \pi_k / \sigma_k^2
+            for ist in range(self.nst):
+                if (not valid_state[ist]):
+                    continue
+                u = pos_diff * inv_sigma_sq[ist][np.newaxis, np.newaxis, :, :]  # (I, J, a, d)
+                pi = self.g_i_IJ[ist] / g_safe[:, np.newaxis]  # (I, J)
+                inv_sig_m = inv_sigma_sq[ist] * inv_mass[:, np.newaxis]  # (nat_qm, ndim)
+                # s_k = \sum_{ad} (1/2M_a)(1/\sigma_k^2 - u_k^2), t_k = \sum_{ad} (1/2M_a) u_k w
+                c_s = np.sum(inv_2m[:, np.newaxis] * inv_sigma_sq[ist])
+                s_k = c_s - np.einsum('a,ijad->ij', inv_2m, u ** 2)  # (I, J)
+                t_k = np.einsum('a,ijad,iad->ij', inv_2m, u, w)  # (I, J)
+                force += 0.5 * np.einsum('ij,ijad,ad->iad', pi, u, inv_sig_m)
+                force += 0.5 * np.einsum('ij,ijad,ij->iad', pi, u, s_k - t_k)
+                pi_s += np.einsum('ij,ij->i', pi, s_k)
+                pi_lam += np.sum(pi, axis=1)[:, np.newaxis, np.newaxis] * inv_sigma_sq[ist][np.newaxis, :, :]
+            force += 0.25 * pi_lam * w * inv_mass[np.newaxis, :, np.newaxis]
+
+            w_sq_m = np.einsum('a,tad->t', inv_2m, w ** 2)  # (ntrajs,)
+            x_val = -0.5 * pi_s - 0.5 * w_sq_m
+            force -= w * x_val[:, np.newaxis, np.newaxis]
+
+            self.qpot_force = np.where(valid_traj[:, np.newaxis, np.newaxis], force, 0.0)
+            self.qpot = np.where(valid_traj, 0.5 * pi_s + 0.25 * w_sq_m, 0.0)
+
+        elif (self.l_qpot_real_pop):
+            # Geometric mixture with frozen |C_j|^2 weights: single effective Gaussian per
+            # trajectory, consistent with the linear quantum momentum (l_real_pop=True form)
+            pi = np.where(valid_state[np.newaxis, :], rho, 0.0)  # (ntrajs, nst)
+            u = (pos[np.newaxis, :, :, :] - self.avg_R[:, np.newaxis, :, :]) \
+                * inv_sigma_sq[:, np.newaxis, :, :]  # (nst, ntrajs, nat_qm, ndim)
+            w = -np.einsum('ts,stad->tad', pi, u)  # \nabla|\chi|^2 / |\chi|^2
+            lam = np.einsum('ts,sad->tad', pi, inv_sigma_sq)  # effective inverse variance
+            self.qpot_force = -0.25 * w * lam * inv_mass[np.newaxis, :, np.newaxis]
+            self.qpot = np.einsum('a,tad->t', inv_2m, 0.5 * lam - 0.25 * w ** 2)
+
+        else:
+            # Arithmetic mixture of state-wise Gaussians with <|C_j|^2> weights
+            valid_traj = self.g_I >= self.small  # (ntrajs,)
+            g_safe = np.where(valid_traj, self.g_I, 1.0)
+            pi = np.where(valid_state[:, np.newaxis], self.g_i_I / g_safe[np.newaxis, :], 0.0)  # (nst, ntrajs)
+
+            u = (pos[np.newaxis, :, :, :] - self.avg_R[:, np.newaxis, :, :]) \
+                * inv_sigma_sq[:, np.newaxis, :, :]  # (nst, ntrajs, nat_qm, ndim)
+            w = -np.einsum('st,stad->tad', pi, u)  # (ntrajs, nat_qm, ndim)
+
+            inv_sig_m = inv_sigma_sq * inv_mass[np.newaxis, :, np.newaxis]  # (nst, nat_qm, ndim)
+            # s_k = \sum_{ad} (1/2M_a)(1/\sigma_k^2 - u_k^2), t_k = \sum_{ad} (1/2M_a) u_k w
+            c_s = np.einsum('a,sad->s', inv_2m, inv_sigma_sq)  # (nst,)
+            s_k = c_s[:, np.newaxis] - np.einsum('a,stad->st', inv_2m, u ** 2)  # (nst, ntrajs)
+            t_k = np.einsum('a,stad,tad->st', inv_2m, u, w)  # (nst, ntrajs)
+
+            force = 0.5 * np.einsum('st,stad,sad->tad', pi, u, inv_sig_m)
+            force += 0.5 * np.einsum('st,stad,st->tad', pi, u, s_k - t_k)
+            pi_lam = np.einsum('st,sad->tad', pi, inv_sigma_sq)
+            force += 0.25 * pi_lam * w * inv_mass[np.newaxis, :, np.newaxis]
+
+            pi_s = np.einsum('st,st->t', pi, s_k)  # (ntrajs,)
+            w_sq_m = np.einsum('a,tad->t', inv_2m, w ** 2)  # (ntrajs,)
+            x_val = -0.5 * pi_s - 0.5 * w_sq_m
+            force -= w * x_val[:, np.newaxis, np.newaxis]
+
+            self.qpot_force = np.where(valid_traj[:, np.newaxis, np.newaxis], force, 0.0)
+            self.qpot = np.where(valid_traj, 0.5 * pi_s + 0.25 * w_sq_m, 0.0)
+
     def check_istates(self):
         """ Routine to check istates and init_coefs
         """
