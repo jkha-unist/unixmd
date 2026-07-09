@@ -1294,6 +1294,11 @@ class CTv2(MQC):
                         tmp = f'{istep + 1:9d}{self.K_bo[itrajectory, ist, jst]:15.8f}'
                         typewriter(tmp, unixmd_dir, f"K_BO_{ist}_{jst}", "a")
 
+            # Write quantum potential
+            if (self.l_qpot):
+                tmp = f'{istep + 1:9d}{self.qpot[itrajectory]:15.8f}'
+                typewriter(tmp, unixmd_dir, "QPOT", "a")
+
         # Write detailed quantities related to decoherence
         if (self.verbosity >= 2):
             tmp = f'{istep + 1:9d}' + "".join([f'{pop:15.8f}' for pop in self.pseudo_pop[:, itrajectory]])
@@ -1330,6 +1335,13 @@ class CTv2(MQC):
                 "".join(["\n" + f'{self.mol.symbols[iat]:5s}' + \
                 "".join([f'{self.intercept[itrajectory, iat, idim]:15.8f}' for idim in range(self.ndim)]) for iat in range(self.nat_qm)])
             typewriter(tmp, unixmd_dir, f"INTERCEPT", "a")
+
+            # Write quantum potential force
+            if (self.l_qpot):
+                tmp = f'{self.nat_qm:6d}\n{"":2s}Step:{istep + 1:6d}{"":12s}QP Force (au)' + \
+                    "".join(["\n" + f'{self.mol.symbols[iat]:5s}' + \
+                    "".join([f'{self.qpot_force[itrajectory, iat, idim]:15.8f}' for idim in range(self.ndim)]) for iat in range(self.nat_qm)])
+                typewriter(tmp, unixmd_dir, f"QPOT_FORCE", "a")
 
             index_lk = -1
             for ist in range(self.nst):
