@@ -344,6 +344,9 @@ class CTv2(MQC):
                 if self.use_gpu and self._gpu_kernels is not None:
                     self.gpu.synchronize()
 
+                if (self.l_qpot):
+                    self.calculate_qpot_force()
+
                 if (self.l_lap):
                     self.get_d2S()
 
@@ -462,6 +465,9 @@ class CTv2(MQC):
                 self.calculate_qmom()
                 if self.use_gpu and self._gpu_kernels is not None:
                     self.gpu.synchronize()
+
+                if (self.l_qpot):
+                    self.calculate_qpot_force()
 
                 if (self.l_lap):
                     self.get_d2S()
@@ -698,6 +704,10 @@ class CTv2(MQC):
 
         # Finally, force is Ehrenfest force + CT force
         self.rforce += ctforce
+
+        # Quantum potential force (computed in calculate_qpot_force at the previous step)
+        if (self.l_qpot):
+            self.rforce += self.qpot_force[itrajectory]
 
     def update_energy(self):
         """ Routine to update the energy of molecules in CTMQC dynamics
