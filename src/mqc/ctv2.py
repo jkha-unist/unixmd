@@ -95,9 +95,9 @@ class CTv2(MQC):
         :param boolean l_real_pop: Use \|C_j\|^2 for \|chi_j\|^2/\|chi\|^2 in quantum momentum calculation.
         :param integer t_pc: Phase correction scheme (1: use P, 2: use sum_j nabla S_j)
         :param boolean l_qpot: Include the quantum potential force in nuclear propagation
-        :param boolean l_qpot_real_pop: Use \|C_j\|^2 weights (geometric Gaussian mixture consistent
-            with the linear quantum momentum) for the quantum potential density instead of the
-            ensemble-averaged arithmetic mixture (used only when l_traj_gaussian = False)
+        :param boolean l_qpot_real_pop: Use \|C_j\|^2 for \|chi_j\|^2/\|chi\|^2 in the quantum
+            potential calculation (cf. l_real_pop), instead of the ratio reconstructed from
+            the Gaussian densities (used only when l_traj_gaussian = False)
         :param use_gpu: GPU acceleration mode. False (CPU, default), True (force GPU), 'auto' (detect GPU)
         :param integer ncpus: Number of CPUs for parallel QM calculations (1 = serial, default)
     """
@@ -1171,15 +1171,29 @@ class CTv2(MQC):
             self.qpot = np.where(valid_traj, 0.5 * pi_s + 0.25 * w_sq_m, 0.0)
 
         elif (self.l_qpot_real_pop):
-            # Geometric mixture with frozen |C_j|^2 weights: single effective Gaussian per
-            # trajectory, consistent with the linear quantum momentum (l_real_pop=True form)
-            pi = np.where(valid_state[np.newaxis, :], rho, 0.0)  # (ntrajs, nst)
+            # Arithmetic mixture of state-wise Gaussians, with the exact identity
+            # |\chi_j|^2/|\chi|^2 = rho_jj used for the mixture ratio (cf. l_real_pop in
+            # calculate_slope) instead of the ratio reconstructed from the Gaussians.
+            # rho_jj carries no R dependence, so the ratio is frozen when differentiating
+            # and the \nabla pi_j terms of the general branch vanish from F = -\nabla Q.
+            pi = rho.T  # (nst, ntrajs); invalid states drop out via inv_sigma_sq = 0
+
             u = (pos[np.newaxis, :, :, :] - self.avg_R[:, np.newaxis, :, :]) \
                 * inv_sigma_sq[:, np.newaxis, :, :]  # (nst, ntrajs, nat_qm, ndim)
-            w = -np.einsum('ts,stad->tad', pi, u)  # \nabla|\chi|^2 / |\chi|^2
-            lam = np.einsum('ts,sad->tad', pi, inv_sigma_sq)  # effective inverse variance
-            self.qpot_force = -0.25 * w * lam * inv_mass[np.newaxis, :, np.newaxis]
-            self.qpot = np.einsum('a,tad->t', inv_2m, 0.5 * lam - 0.25 * w ** 2)
+            w = -np.einsum('st,stad->tad', pi, u)  # \nabla|\chi|^2 / |\chi|^2
+
+            inv_sig_m = inv_sigma_sq * inv_mass[np.newaxis, :, np.newaxis]  # (nst, nat_qm, ndim)
+            # s_k = \sum_{ad} (1/2M_a)(1/\sigma_k^2 - u_k^2)
+            c_s = np.einsum('a,sad->s', inv_2m, inv_sigma_sq)  # (nst,)
+            s_k = c_s[:, np.newaxis] - np.einsum('a,stad->st', inv_2m, u ** 2)  # (nst, ntrajs)
+            lam = np.einsum('st,sad->tad', pi, inv_sigma_sq)  # (ntrajs, nat_qm, ndim)
+
+            self.qpot_force = 0.5 * np.einsum('st,stad,sad->tad', pi, u, inv_sig_m) \
+                + 0.25 * lam * w * inv_mass[np.newaxis, :, np.newaxis]
+
+            pi_s = np.einsum('st,st->t', pi, s_k)  # (ntrajs,)
+            w_sq_m = np.einsum('a,tad->t', inv_2m, w ** 2)  # (ntrajs,)
+            self.qpot = 0.5 * pi_s + 0.25 * w_sq_m
 
         else:
             # Arithmetic mixture of state-wise Gaussians with <|C_j|^2> weights
