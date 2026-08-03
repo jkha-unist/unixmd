@@ -35,8 +35,7 @@ class CTv2Score(CTv2):
         BO-projected density), every score_cv_update steps, damped by the
         score_cv_max_factor hysteresis cap. The selected-tau trace (SCORE_TAU)
         and the held-out J curves (SCORE_TAU_CURVE) are written to the run
-        output directory. See work/handoff/note_gb_tau_selection.pdf for the
-        full derivation and algorithm.
+        output directory.
 
         :param object,list molecules: List of molecule objects
         :param integer score_nknots: Number of interior knots of the B-spline basis
