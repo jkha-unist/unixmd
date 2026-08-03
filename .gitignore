@@ -1,0 +1,14 @@
+build/
+lib/
+src/lib/cioverlap/cioverlap.c
+src/lib/mqc/el_propagator.c
+src/lib/mqc/el_propagator_ct.c
+src/lib/mqc/el_propagator_ctv2.c
+src/lib/mqc/el_propagator_xf.c
+src/lib/mqc/el_propagator_xfv2.c
+src/lib/mqc_qed/el_propagator.c
+src/lib/mqc_qed/el_propagator_xf.c
+**/__pycache__/
+tests/TEST-*/
+CLAUDE.md
+.claude/

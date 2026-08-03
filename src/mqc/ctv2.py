@@ -94,6 +94,10 @@ class CTv2(MQC):
         :param double x_fin: Define asymptotic region (a.u.)
         :param boolean l_real_pop: Use \|C_j\|^2 for \|chi_j\|^2/\|chi\|^2 in quantum momentum calculation.
         :param integer t_pc: Phase correction scheme (1: use P, 2: use sum_j nabla S_j)
+        :param boolean l_qpot: Include the quantum potential force in nuclear propagation
+        :param boolean l_qpot_real_pop: Use \|C_j\|^2 for \|chi_j\|^2/\|chi\|^2 in the quantum
+            potential calculation (cf. l_real_pop), instead of the ratio reconstructed from
+            the Gaussian densities (used only when l_traj_gaussian = False)
         :param use_gpu: GPU acceleration mode. False (CPU, default), True (force GPU), 'auto' (detect GPU)
         :param integer ncpus: Number of CPUs for parallel QM calculations (1 = serial, default)
     """
@@ -103,7 +107,7 @@ class CTv2(MQC):
         l_crunch=True, l_dc_w_mom=True, l_traj_gaussian=False, \
         t_cons=2, l_etot0=True, l_lap=False,\
         l_en_cons=False, artifact_expon=0.2, l_asymp=False, x_fin=25.0, \
-        l_real_pop=True, t_pc=1, use_gpu=False, ncpus=1):
+        l_real_pop=True, t_pc=1, l_qpot=False, l_qpot_real_pop=False, use_gpu=False, ncpus=1):
         # Save name of MQC dynamics
         self.md_type = self.__class__.__name__
 
@@ -173,6 +177,10 @@ class CTv2(MQC):
         self.avg_R = np.zeros((self.nst, self.nat_qm, self.ndim))
         self.pseudo_pop = np.zeros((self.nst, self.ntrajs))
 
+        # Initialize variables for quantum potential
+        self.qpot = np.zeros((self.ntrajs)) # quantum potential Q at each trajectory position
+        self.qpot_force = np.zeros((self.ntrajs, self.nat_qm, self.ndim)) # F^QP = -\nabla Q
+
         # Determine parameters to calculate decoherenece effect
         self.small = 1.0E-08
 
@@ -194,6 +202,14 @@ class CTv2(MQC):
         self.t_pc = t_pc
         self.t_cons = t_cons
         self.l_etot0 = l_etot0
+        self.l_qpot = l_qpot
+        self.l_qpot_real_pop = l_qpot_real_pop
+
+        # Exception for quantum potential with total energy enforcement
+        if (self.l_qpot and self.l_en_cons):
+            error_message = "Quantum potential force cannot be combined with the total energy enforcement!"
+            error_vars = f"l_qpot = {self.l_qpot}, l_en_cons = {self.l_en_cons}"
+            raise ValueError (f"( {self.md_type}.{call_name()} ) {error_message} ( {error_vars} )")
 
         # Variables for aborting dynamics when all trajectories reach asymptotic region
         self.l_asymp = l_asymp
@@ -221,6 +237,13 @@ class CTv2(MQC):
                 self._gpu_kernels = None
         else:
             self._gpu_kernels = None
+
+        # Exception for quantum potential with GPU backend
+        # (density arrays live on the GPU in that path)
+        if (self.l_qpot and self.use_gpu):
+            error_message = "Quantum potential force is not implemented for the GPU backend!"
+            error_vars = f"l_qpot = {self.l_qpot}, use_gpu = {use_gpu}"
+            raise NotImplementedError (f"( {self.md_type}.{call_name()} ) {error_message} ( {error_vars} )")
 
         # CPU parallelization
         self.ncpus = max(1, int(ncpus))
@@ -320,6 +343,9 @@ class CTv2(MQC):
                 self.calculate_qmom()
                 if self.use_gpu and self._gpu_kernels is not None:
                     self.gpu.synchronize()
+
+                if (self.l_qpot):
+                    self.calculate_qpot_force()
 
                 if (self.l_lap):
                     self.get_d2S()
@@ -439,6 +465,9 @@ class CTv2(MQC):
                 self.calculate_qmom()
                 if self.use_gpu and self._gpu_kernels is not None:
                     self.gpu.synchronize()
+
+                if (self.l_qpot):
+                    self.calculate_qpot_force()
 
                 if (self.l_lap):
                     self.get_d2S()
@@ -582,19 +611,22 @@ class CTv2(MQC):
             self.etot0[itrajectory] = self.mol.etot
 
         # Vectorized state momentum calculation
-        energies = np.array([st.energy for st in self.mol.states])  # (nst,)
-        if (self.l_etot0):
-            alpha = (self.etot0[itrajectory] - energies) / self.mol.ekin
+        if (self.mol.ekin > self.small):
+            energies = np.array([st.energy for st in self.mol.states])  # (nst,)
+            if (self.l_etot0):
+                alpha = (self.etot0[itrajectory] - energies) / self.mol.ekin
+            else:
+                alpha = (self.mol.etot - energies) / self.mol.ekin
+
+            alpha = np.maximum(alpha, 0.)  # Clip negative values
+            sqrt_alpha = np.sqrt(alpha)  # (nst,)
+
+            # vel: (nat_qm, ndim), mass: (nat_qm,)
+            # mom shape: (nst, nat_qm, ndim)
+            vel_mass = self.mol.vel[:self.nat_qm, :] * self.mol.mass[:self.nat_qm, np.newaxis]  # (nat_qm, ndim)
+            self.mom[itrajectory, :, :, :] = sqrt_alpha[:, np.newaxis, np.newaxis] * vel_mass[np.newaxis, :, :]
         else:
-            alpha = (self.mol.etot - energies) / self.mol.ekin
-
-        alpha = np.maximum(alpha, 0.)  # Clip negative values
-        sqrt_alpha = np.sqrt(alpha)  # (nst,)
-
-        # vel: (nat_qm, ndim), mass: (nat_qm,)
-        # mom shape: (nst, nat_qm, ndim)
-        vel_mass = self.mol.vel[:self.nat_qm, :] * self.mol.mass[:self.nat_qm, np.newaxis]  # (nat_qm, ndim)
-        self.mom[itrajectory, :, :, :] = sqrt_alpha[:, np.newaxis, np.newaxis] * vel_mass[np.newaxis, :, :]
+            self.mom[itrajectory, :, :, :] = 0.0
 
     def calculate_force(self, itrajectory):
         """ Routine to calculate force
@@ -624,7 +656,7 @@ class CTv2(MQC):
         if (self.l_crunch):
             # Vectorized CT force with CRUNCH
             K_diff = self.K_bo[itrajectory] - self.K[itrajectory]  # (nst, nst)
-            ctforce = -np.einsum('ij,ijkl,ij->kl', K_diff, phase_diff, rho_ij)
+            ctforce = -np.einsum('ij,ijad,ij->ad', K_diff, phase_diff, rho_ij)
 
             inv_mass = 1. / self.mol.mass[0:self.nat_qm]  # (nat_qm,)
 
@@ -648,7 +680,7 @@ class CTv2(MQC):
                 # ctforce contribution: 2.0 * lap_term[i,j] * phase_diff[i,j] * rho_diag[i] * rho_diag[j]
                 # Only upper triangular matters due to antisymmetry
                 triu_mask = np.triu(np.ones((self.nst, self.nst), dtype=bool), k=1)
-                lap_force = np.einsum('ij,ijkl,ij->kl', np.where(triu_mask, lap_term, 0.0), phase_diff, rho_ij)
+                lap_force = np.einsum('ij,ijad,ij->ad', np.where(triu_mask, lap_term, 0.0), phase_diff, rho_ij)
                 ctforce -= 2.0 * lap_force
 
             if (self.t_cons == 2):
@@ -664,14 +696,18 @@ class CTv2(MQC):
 
                 # ctforce contribution
                 triu_mask = np.triu(np.ones((self.nst, self.nst), dtype=bool), k=1)
-                beta_force = np.einsum('ij,ijkl,ij->kl', np.where(triu_mask, beta_mat, 0.0), phase_diff, rho_ij)
+                beta_force = np.einsum('ij,ijad,ij->ad', np.where(triu_mask, beta_mat, 0.0), phase_diff, rho_ij)
                 ctforce -= 2.0 * beta_force
         else:
             # Vectorized CT force without CRUNCH
-            ctforce = -np.einsum('ij,ijkl,ij->kl', self.K[itrajectory], phase_diff, rho_ij)
+            ctforce = -np.einsum('ij,ijad,ij->ad', self.K[itrajectory], phase_diff, rho_ij)
 
         # Finally, force is Ehrenfest force + CT force
         self.rforce += ctforce
+
+        # Quantum potential force (computed in calculate_qpot_force at the previous step)
+        if (self.l_qpot):
+            self.rforce += self.qpot_force[itrajectory]
 
     def update_energy(self):
         """ Routine to update the energy of molecules in CTMQC dynamics
@@ -778,7 +814,9 @@ class CTv2(MQC):
         """ Routine to calculate quantum momentum
         """
         # _lk means state_pair dependency.
-        # i and j are trajectory index.
+        # i and j are state (Gaussian-component) indices.
+        # I and J are trajectory indices.
+        # a is the nucleus index and d is the cartesian component index.
         # -------------------------------------------------------------------
         # 1. Calculate variances for each trajectory
         self.calculate_sigma()
@@ -823,10 +861,10 @@ class CTv2(MQC):
 
         # qmom_phase: sum over ndim of qmom * phase_diff -> (ntrajs, nst, nst, nat_qm)
         # qmom: (ntrajs, nat_qm, ndim), phase_diff: (ntrajs, nst, nst, nat_qm, ndim)
-        qmom_phase = np.einsum('tad,tijad->tija', self.qmom, phase_diff)
+        qmom_phase = np.einsum('Iad,Iijad->Iija', self.qmom, phase_diff)
 
         # K: sum over atoms with inv_mass -> (ntrajs, nst, nst)
-        K_full = 0.5 * np.einsum('a,tija->tij', inv_mass, qmom_phase)
+        K_full = 0.5 * np.einsum('a,Iija->Iij', inv_mass, qmom_phase)
 
         # Apply coherence mask and upper triangular
         triu_mask = np.triu(np.ones((self.nst, self.nst), dtype=bool), k=1)
@@ -940,7 +978,7 @@ class CTv2(MQC):
         sigma_sq = self.sigma ** 2  # (nst, nat_qm, ndim)
         inv_sigma_sq = np.where(sigma_sq > self.small, 1.0 / sigma_sq, 0.0)  # (nst, nat_qm, ndim)
         # slope: (ntrajs, nat_qm, ndim) = -sum over ist of pseudo_pop[ist, itraj] * inv_sigma_sq[ist, iat, isp]
-        self.slope = -np.einsum('st,sab->tab', self.pseudo_pop, inv_sigma_sq)
+        self.slope = -np.einsum('jI,jad->Iad', self.pseudo_pop, inv_sigma_sq)
 
         if (self.l_crunch):
             # Vectorized slope_bo calculation
@@ -978,10 +1016,10 @@ class CTv2(MQC):
             # intercept = -sum_jtraj sum_ist (g_i_IJ[ist,itraj,jtraj] * pos[jtraj] / sigma[ist]^2) / g_I[itraj]
             # g_i_IJ: (nst, ntrajs, ntrajs), pos: (ntrajs, nat_qm, ndim), inv_sigma_sq: (nst, nat_qm, ndim)
 
-            # Weighted position: g_i_IJ[s,i,j] * pos[j,a,d] * inv_sigma_sq[s,a,d]
-            # Sum over j and s to get intercept[i,a,d]
-            # Using einsum: 'sij,jad,sad->iad'
-            intercept_sum = np.einsum('sij,jad,sad->iad', self.g_i_IJ, pos, inv_sigma_sq)
+            # Weighted position: g_i_IJ[j,I,J] * pos[J,a,d] * inv_sigma_sq[j,a,d]
+            # Sum over J and j to get intercept[I,a,d]
+            # Using einsum: 'jIJ,Jad,jad->Iad'
+            intercept_sum = np.einsum('jIJ,Jad,jad->Iad', self.g_i_IJ, pos, inv_sigma_sq)
 
             # Safe division by g_I
             g_I_safe = np.where(valid_g_I, self.g_I, 1.0)
@@ -995,7 +1033,7 @@ class CTv2(MQC):
             # Vectorized: intercept = -sum_ist(pseudo_pop[ist] * avg_R[ist] / sigma[ist]^2)
             # pseudo_pop: (nst, ntrajs), avg_R: (nst, nat_qm, ndim), inv_sigma_sq: (nst, nat_qm, ndim)
             weighted_avg_R = self.avg_R * inv_sigma_sq  # (nst, nat_qm, ndim)
-            self.intercept = -np.einsum('st,sab->tab', self.pseudo_pop, weighted_avg_R)
+            self.intercept = -np.einsum('jI,jad->Iad', self.pseudo_pop, weighted_avg_R)
 
         # Calculate center from slope and intercept (safe division)
         slope_valid = np.abs(self.slope) >= self.small
@@ -1025,13 +1063,13 @@ class CTv2(MQC):
                             g_i_I_ist_safe = np.where(g_i_valid, self.g_i_I[ist, :], 1.0)  # (ntrajs,)
                             g_i_I_jst_safe = np.where(g_i_valid, self.g_i_I[jst, :], 1.0)  # (ntrajs,)
 
-                            # Term 1: sum_j (g_i_IJ[ist,i,j] * pos[j,a,d] / sigma_i_sq[a,d]) / g_i_I[ist,i]
+                            # Term 1: sum_J (g_i_IJ[ist,I,J] * pos[J,a,d] / sigma_i_sq[a,d]) / g_i_I[ist,I]
                             # g_i_IJ[ist]: (ntrajs, ntrajs), pos: (ntrajs, nat_qm, ndim)
-                            term1_sum = np.einsum('ij,jad->iad', self.g_i_IJ[ist], pos) / sigma_i_sq[np.newaxis, :, :]
+                            term1_sum = np.einsum('IJ,Jad->Iad', self.g_i_IJ[ist], pos) / sigma_i_sq[np.newaxis, :, :]
                             term1 = term1_sum / g_i_I_ist_safe[:, np.newaxis, np.newaxis]
 
-                            # Term 2: sum_j (g_i_IJ[jst,i,j] * pos[j,a,d] / sigma_j_sq[a,d]) / g_i_I[jst,i]
-                            term2_sum = np.einsum('ij,jad->iad', self.g_i_IJ[jst], pos) / sigma_j_sq[np.newaxis, :, :]
+                            # Term 2: sum_J (g_i_IJ[jst,I,J] * pos[J,a,d] / sigma_j_sq[a,d]) / g_i_I[jst,I]
+                            term2_sum = np.einsum('IJ,Jad->Iad', self.g_i_IJ[jst], pos) / sigma_j_sq[np.newaxis, :, :]
                             term2 = term2_sum / g_i_I_jst_safe[:, np.newaxis, np.newaxis]
 
                             intercept_val = -(term1 + term2)
@@ -1067,6 +1105,164 @@ class CTv2(MQC):
                         pos
                     )
                     index_lk += 1
+
+    def calculate_qpot_force(self):
+        """ Routine to calculate the quantum potential and its nuclear force
+
+            The nuclear density is the same Gaussian mixture used for the quantum momentum,
+            kept frozen while differentiating: F^QP = -\\nabla Q evaluated at each trajectory
+            position (a trajectory's own Gaussian center is a frozen parameter of the density).
+            Requires calculate_sigma/calculate_slope to be called first (via calculate_qmom).
+        """
+        # i and j are state (Gaussian-component) indices.
+        # I and J are trajectory indices.
+        # a is the nucleus index and d is the cartesian component index.
+        # -------------------------------------------------------------------
+        # 1. Collect positions and populations; mask states below rho_threshold
+        pos = np.array([mol.pos for mol in self.mols])  # (ntrajs, nat_qm, ndim)
+        rho = np.array([np.diag(mol.rho.real) for mol in self.mols])  # (ntrajs, nst)
+        rho_avg = np.sum(rho, axis=0) / self.ntrajs  # (nst,)
+        valid_state = rho_avg >= self.lower_th  # (nst,)
+
+        # 2. Calculate common factors: inverse masses and inverse variances
+        inv_mass = 1. / self.mol.mass[0:self.nat_qm]  # (nat_qm,)
+        inv_2m = 0.5 * inv_mass  # (nat_qm,)
+
+        sigma_sq = self.sigma ** 2  # (nst, nat_qm, ndim)
+        inv_sigma_sq = np.where(sigma_sq > self.small, 1. / sigma_sq, 0.0)  # 1/inf = 0 for invalid states
+        inv_sigma_sq = np.where(valid_state[:, np.newaxis, np.newaxis], inv_sigma_sq, 0.0)
+
+        self.qpot.fill(0.)
+        self.qpot_force.fill(0.)
+
+        if (self.l_traj_gaussian):
+            # Arithmetic mixture of trajectory-centered Gaussians: components (j, J)
+            # with \pi_j -> \pi^{(J)}_j = g^{(J)}_j / |\chi|^2 and \sum_j -> \sum_j \sum_J
+            valid_traj = (self.g_I / self.ntrajs) >= self.small  # (ntrajs,)
+            g_safe = np.where(valid_traj, self.g_I, 1.0)  # (ntrajs,)
+
+            pos_diff = pos[:, np.newaxis, :, :] - pos[np.newaxis, :, :, :]  # (ntrajs, ntrajs, nat_qm, ndim)
+
+            # 3. Calculate building blocks (first pass over states)
+            # u^{(J)}_{\nu p,j} = (R_{\nu p} - R^{(J)}_{\nu p}) / \sigma^2_{\nu p,j}
+            # W_{\nu p} = \nabla_{\nu p}|\chi|^2 / |\chi|^2 = -\sum_j \sum_J \pi^{(J)}_j u^{(J)}_{\nu p,j}
+            w = np.zeros((self.ntrajs, self.nat_qm, self.ndim))
+            for ist in range(self.nst):
+                if (not valid_state[ist]):
+                    continue
+                u = pos_diff * inv_sigma_sq[ist][np.newaxis, np.newaxis, :, :]  # (I, J, a, d)
+                w -= np.einsum('IJ,IJad->Iad', self.g_i_IJ[ist], u)
+            w /= g_safe[:, np.newaxis, np.newaxis]
+
+            # 4. Calculate quantum potential force (second pass over states)
+            # F^{QP}_{\nu p} = 0.5 \sum_j \sum_J \pi^{(J)}_j u^{(J)}_{\nu p,j} (1/(M_\nu \sigma^2_{\nu p,j}) + s^{(J)}_j - t^{(J)}_j)
+            #     + 0.25 W_{\nu p} \Lambda_{\nu p} / M_\nu
+            #     + W_{\nu p} (Q + 0.25 \sum_{\mu q} W^2_{\mu q} / 2M_\mu)
+            force = np.zeros((self.ntrajs, self.nat_qm, self.ndim))
+            pi_s = np.zeros((self.ntrajs))  # \sum_j \sum_J \pi^{(J)}_j s^{(J)}_j
+            lam = np.zeros((self.ntrajs, self.nat_qm, self.ndim))  # \Lambda_{\nu p} = \sum_j \sum_J \pi^{(J)}_j / \sigma^2_{\nu p,j}
+            for ist in range(self.nst):
+                if (not valid_state[ist]):
+                    continue
+                u = pos_diff * inv_sigma_sq[ist][np.newaxis, np.newaxis, :, :]  # (I, J, a, d)
+                pi = self.g_i_IJ[ist] / g_safe[:, np.newaxis]  # (I, J)
+                inv_sig_m = inv_sigma_sq[ist] * inv_mass[:, np.newaxis]  # (nat_qm, ndim)
+                # s^{(J)}_j = \sum_{\mu q} (1/2M_\mu)(1/\sigma^2_{\mu q,j} - (u^{(J)}_{\mu q,j})^2)
+                # t^{(J)}_j = \sum_{\mu q} (1/2M_\mu) u^{(J)}_{\mu q,j} W_{\mu q}
+                c_s = np.sum(inv_2m[:, np.newaxis] * inv_sigma_sq[ist])
+                s_j = c_s - np.einsum('a,IJad->IJ', inv_2m, u ** 2)  # (I, J)
+                t_j = np.einsum('a,IJad,Iad->IJ', inv_2m, u, w)  # (I, J)
+                force += 0.5 * np.einsum('IJ,IJad,ad->Iad', pi, u, inv_sig_m)
+                force += 0.5 * np.einsum('IJ,IJad,IJ->Iad', pi, u, s_j - t_j)
+                pi_s += np.einsum('IJ,IJ->I', pi, s_j)
+                lam += np.sum(pi, axis=1)[:, np.newaxis, np.newaxis] * inv_sigma_sq[ist][np.newaxis, :, :]
+            force += 0.25 * lam * w * inv_mass[np.newaxis, :, np.newaxis]
+
+            # 5. Calculate quantum potential and reuse it in the last force group
+            # Q = 0.5 \sum_j \sum_J \pi^{(J)}_j s^{(J)}_j + 0.25 \sum_{\nu p} W^2_{\nu p} / 2M_\nu
+            w_sq_m = np.einsum('a,Iad->I', inv_2m, w ** 2)  # (ntrajs,)
+            q_val = 0.5 * pi_s + 0.25 * w_sq_m
+            force += w * (q_val + 0.25 * w_sq_m)[:, np.newaxis, np.newaxis]
+
+            self.qpot_force = np.where(valid_traj[:, np.newaxis, np.newaxis], force, 0.0)
+            self.qpot = np.where(valid_traj, q_val, 0.0)
+
+        elif (self.l_qpot_real_pop):
+            # Arithmetic mixture of state-wise Gaussians, with the exact identity
+            # |\chi_j|^2/|\chi|^2 = rho_jj used for the mixture ratio (cf. l_real_pop in
+            # calculate_slope) instead of the ratio reconstructed from the Gaussians.
+            # rho_jj carries no R dependence, so the ratio is frozen when differentiating
+            # and the \nabla pi_j terms of the general branch vanish from F = -\nabla Q.
+
+            # 3. Calculate building blocks with frozen ratios \pi_j = \rho_{jj}
+            # u_{\nu p,j} = (R_{\nu p} - R_{\nu p,j}) / \sigma^2_{\nu p,j}
+            # W_{\nu p} = \nabla_{\nu p}|\chi|^2 / |\chi|^2 = -\sum_j \pi_j u_{\nu p,j}
+            # s_j = \sum_{\mu q} (1/2M_\mu)(1/\sigma^2_{\mu q,j} - u^2_{\mu q,j})
+            # \Lambda_{\nu p} = \sum_j \pi_j / \sigma^2_{\nu p,j}
+            pi = rho.T  # (nst, ntrajs); invalid states drop out via inv_sigma_sq = 0
+
+            u = (pos[np.newaxis, :, :, :] - self.avg_R[:, np.newaxis, :, :]) \
+                * inv_sigma_sq[:, np.newaxis, :, :]  # (nst, ntrajs, nat_qm, ndim)
+            w = -np.einsum('jI,jIad->Iad', pi, u)  # (ntrajs, nat_qm, ndim)
+
+            inv_sig_m = inv_sigma_sq * inv_mass[np.newaxis, :, np.newaxis]  # (nst, nat_qm, ndim)
+            c_s = np.einsum('a,jad->j', inv_2m, inv_sigma_sq)  # (nst,)
+            s_j = c_s[:, np.newaxis] - np.einsum('a,jIad->jI', inv_2m, u ** 2)  # (nst, ntrajs)
+            lam = np.einsum('jI,jad->Iad', pi, inv_sigma_sq)  # (ntrajs, nat_qm, ndim)
+
+            # 4. Calculate quantum potential force (frozen ratios)
+            # F^{QP}_{\nu p} = 0.5 \sum_j \pi_j u_{\nu p,j} / (M_\nu \sigma^2_{\nu p,j})
+            #     + 0.25 W_{\nu p} \Lambda_{\nu p} / M_\nu
+            self.qpot_force = 0.5 * np.einsum('jI,jIad,jad->Iad', pi, u, inv_sig_m) \
+                + 0.25 * lam * w * inv_mass[np.newaxis, :, np.newaxis]
+
+            # 5. Calculate quantum potential
+            # Q = 0.5 \sum_j \pi_j s_j + 0.25 \sum_{\nu p} W^2_{\nu p} / 2M_\nu
+            pi_s = np.einsum('jI,jI->I', pi, s_j)  # (ntrajs,)
+            w_sq_m = np.einsum('a,Iad->I', inv_2m, w ** 2)  # (ntrajs,)
+            self.qpot = 0.5 * pi_s + 0.25 * w_sq_m
+
+        else:
+            # Arithmetic mixture of state-wise Gaussians with <|C_j|^2> weights
+
+            # 3. Calculate building blocks
+            # \pi_j = |\chi_j|^2 / |\chi|^2
+            # u_{\nu p,j} = (R_{\nu p} - R_{\nu p,j}) / \sigma^2_{\nu p,j}
+            # W_{\nu p} = \nabla_{\nu p}|\chi|^2 / |\chi|^2 = -\sum_j \pi_j u_{\nu p,j}
+            # s_j = \sum_{\mu q} (1/2M_\mu)(1/\sigma^2_{\mu q,j} - u^2_{\mu q,j})
+            # t_j = \sum_{\mu q} (1/2M_\mu) u_{\mu q,j} W_{\mu q}
+            # \Lambda_{\nu p} = \sum_j \pi_j / \sigma^2_{\nu p,j}
+            valid_traj = self.g_I >= self.small  # (ntrajs,)
+            g_safe = np.where(valid_traj, self.g_I, 1.0)
+            pi = np.where(valid_state[:, np.newaxis], self.g_i_I / g_safe[np.newaxis, :], 0.0)  # (nst, ntrajs)
+
+            u = (pos[np.newaxis, :, :, :] - self.avg_R[:, np.newaxis, :, :]) \
+                * inv_sigma_sq[:, np.newaxis, :, :]  # (nst, ntrajs, nat_qm, ndim)
+            w = -np.einsum('jI,jIad->Iad', pi, u)  # (ntrajs, nat_qm, ndim)
+
+            inv_sig_m = inv_sigma_sq * inv_mass[np.newaxis, :, np.newaxis]  # (nst, nat_qm, ndim)
+            c_s = np.einsum('a,jad->j', inv_2m, inv_sigma_sq)  # (nst,)
+            s_j = c_s[:, np.newaxis] - np.einsum('a,jIad->jI', inv_2m, u ** 2)  # (nst, ntrajs)
+            t_j = np.einsum('a,jIad,Iad->jI', inv_2m, u, w)  # (nst, ntrajs)
+
+            # 4. Calculate quantum potential force
+            # F^{QP}_{\nu p} = 0.5 \sum_j \pi_j u_{\nu p,j} (1/(M_\nu \sigma^2_{\nu p,j}) + s_j - t_j)
+            #     + 0.25 W_{\nu p} \Lambda_{\nu p} / M_\nu
+            #     + W_{\nu p} (Q + 0.25 \sum_{\mu q} W^2_{\mu q} / 2M_\mu)
+            force = 0.5 * np.einsum('jI,jIad,jad->Iad', pi, u, inv_sig_m)
+            force += 0.5 * np.einsum('jI,jIad,jI->Iad', pi, u, s_j - t_j)
+            lam = np.einsum('jI,jad->Iad', pi, inv_sigma_sq)  # (ntrajs, nat_qm, ndim)
+            force += 0.25 * lam * w * inv_mass[np.newaxis, :, np.newaxis]
+
+            # 5. Calculate quantum potential and reuse it in the last force group
+            # Q = 0.5 \sum_j \pi_j s_j + 0.25 \sum_{\nu p} W^2_{\nu p} / 2M_\nu
+            pi_s = np.einsum('jI,jI->I', pi, s_j)  # (ntrajs,)
+            w_sq_m = np.einsum('a,Iad->I', inv_2m, w ** 2)  # (ntrajs,)
+            q_val = 0.5 * pi_s + 0.25 * w_sq_m
+            force += w * (q_val + 0.25 * w_sq_m)[:, np.newaxis, np.newaxis]
+
+            self.qpot_force = np.where(valid_traj[:, np.newaxis, np.newaxis], force, 0.0)
+            self.qpot = np.where(valid_traj, q_val, 0.0)
 
     def check_istates(self):
         """ Routine to check istates and init_coefs
@@ -1152,6 +1348,11 @@ class CTv2(MQC):
                         tmp = f'{istep + 1:9d}{self.K_bo[itrajectory, ist, jst]:15.8f}'
                         typewriter(tmp, unixmd_dir, f"K_BO_{ist}_{jst}", "a")
 
+            # Write quantum potential
+            if (self.l_qpot):
+                tmp = f'{istep + 1:9d}{self.qpot[itrajectory]:15.8f}'
+                typewriter(tmp, unixmd_dir, "QPOT", "a")
+
         # Write detailed quantities related to decoherence
         if (self.verbosity >= 2):
             tmp = f'{istep + 1:9d}' + "".join([f'{pop:15.8f}' for pop in self.pseudo_pop[:, itrajectory]])
@@ -1188,6 +1389,13 @@ class CTv2(MQC):
                 "".join(["\n" + f'{self.mol.symbols[iat]:5s}' + \
                 "".join([f'{self.intercept[itrajectory, iat, idim]:15.8f}' for idim in range(self.ndim)]) for iat in range(self.nat_qm)])
             typewriter(tmp, unixmd_dir, f"INTERCEPT", "a")
+
+            # Write quantum potential force
+            if (self.l_qpot):
+                tmp = f'{self.nat_qm:6d}\n{"":2s}Step:{istep + 1:6d}{"":12s}QP Force (au)' + \
+                    "".join(["\n" + f'{self.mol.symbols[iat]:5s}' + \
+                    "".join([f'{self.qpot_force[itrajectory, iat, idim]:15.8f}' for idim in range(self.ndim)]) for iat in range(self.nat_qm)])
+                typewriter(tmp, unixmd_dir, f"QPOT_FORCE", "a")
 
             index_lk = -1
             for ist in range(self.nst):
@@ -1249,6 +1457,8 @@ class CTv2(MQC):
           t_cons                   = {self.t_cons:>16d}
           l_etot0                  = {self.l_etot0:>16}
           l_lap                    = {self.l_lap:>16}
+          l_qpot                   = {self.l_qpot:>16}
+          l_qpot_real_pop          = {self.l_qpot_real_pop:>16}
           use_gpu                  = {self.use_gpu:>16}
           gpu_device               = {self.gpu.device_name:>16s}
           ncpus                    = {self.ncpus:>16d}

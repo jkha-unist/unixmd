@@ -1,6 +1,7 @@
 from .bomd import BOMD
 from .ct import CT
 from .ctv2 import CTv2
+from .ctv2_score import CTv2Score
 from .eh import Eh
 from .ehxf import EhXF
 from .sh import SH
