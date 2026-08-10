@@ -3,6 +3,7 @@ from qm import dftbplus
 from qm import gamess
 from qm import gaussian09
 from qm import model
+from qm import molcas
 from qm import molpro
 from qm import qchem
 from qm import terachem
